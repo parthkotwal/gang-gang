@@ -164,6 +164,9 @@
   .onboard { max-width: 760px; margin: 30px auto; }
   .approval { margin: 8px 0 2px; border: 1px solid color-mix(in srgb, var(--perm) 45%, transparent); background: color-mix(in srgb, var(--perm) 10%, var(--panel)); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; }
   .approval b { color: var(--perm); }
+  .leadbar { background: color-mix(in srgb, var(--wake) 16%, var(--panel)) !important; }
+  .holdbar[hidden] { display: none; }
+  .holdbar { flex-wrap: wrap; } .holdbar > span { flex: 1 1 320px; }
   .holdbar { background: color-mix(in srgb, var(--perm) 16%, var(--panel)); border-bottom: 1px solid var(--line); padding: 8px 20px; font-size: 13px; display: flex; gap: 10px; align-items: center; }
   .needs { background: var(--perm); color: #fff; border-color: var(--perm); font-weight: 650; }
   .gr { display: grid; grid-template-columns: 1fr 110px; gap: 6px 12px; align-items: center; font-size: 13px; }
@@ -183,6 +186,7 @@
   <button id="newTeamBtn">＋ New team</button>
   <button class="primary" id="addAgentBtn">＋ Add agent</button>
   <button class="needs" id="needsBtn" hidden title="Agents waiting for your approval"></button>
+  <button id="leadBtn" title="Your lead: an assistant chat that sees and acts on everything here for you"></button>
   <button id="pauseBtn" title="Pause: agents finish their current turn and nobody wakes anybody until you resume">Pause team</button>
   <button class="inboxBtn" id="inboxBtn">Inbox <span class="count" id="inboxCount" hidden></span></button>
   <span class="small muted row" style="gap:5px" id="hubState"><span class="hubdot"></span>hub</span>
@@ -194,6 +198,7 @@
   <button data-tab="jobs">Jobs<span class="n" id="nJobs"></span></button>
   <button data-tab="files">File claims<span class="n" id="nClaims"></span></button>
 </nav>
+<div class="holdbar leadbar" id="leadbar" hidden></div>
 <div class="holdbar" id="holdbar" hidden></div>
 <main id="main"></main>
 
@@ -286,6 +291,28 @@ function notifyNew() {
 }
 
 // ---------- render ----------
+// The 2s refresh re-renders everything. Only touch a region's DOM when its HTML actually changed, so
+// clicks that straddle a tick, scroll positions and "Show more" expansions survive.
+function setHtml(el, html) { if (el._html === html) return false; el.innerHTML = html; el._html = html; return true; }
+// Run fn (which may replace #id or its contents) and keep the scroller's view stable: if the user
+// had scrolled down, pin the first visible [data-key] item where it was, so new items at the top don't shift it.
+function keepScroll(id, fn) {
+  const box = $(id), top = box?.scrollTop || 0; let key = null, off = 0;
+  if (top > 0) {
+    const bt = box.getBoundingClientRect().top;
+    const a = [...box.querySelectorAll("[data-key]")].find((x) => x.getBoundingClientRect().bottom > bt);
+    if (a) { key = a.dataset.key; off = a.getBoundingClientRect().top - bt; }
+  }
+  const r = fn();
+  const nb = $(id);
+  if (nb && top > 0) {
+    nb.scrollTop = top;
+    const a = key && nb.querySelector(`[data-key="${key}"]`);
+    if (a) nb.scrollTop += a.getBoundingClientRect().top - nb.getBoundingClientRect().top - off;
+  }
+  return r;
+}
+const expanded = new Set(); // activity ids whose "Show more" was clicked
 function render(force) {
   if (!S) return;
   // header
@@ -301,7 +328,14 @@ function render(force) {
   const paused = !!S.settings?.paused;
   $("pauseBtn").textContent = paused ? "▶ Resume team" : "⏸ Pause team";
   $("holdbar").hidden = !S.hold;
-  if (S.hold) $("holdbar").innerHTML = `<b>On hold:</b> ${esc(S.hold)}. Agents finish their current turn, but nobody goes on call and teammate wakes become plain messages. Your own messages and wakes still work.${paused ? ` <button class="small" onclick="setPaused(false)">Resume</button>` : ` <button class="small" onclick="openTeamSettings()">Change quiet hours</button>`}`;
+  if (S.hold) setHtml($("holdbar"), `<span><b>On hold:</b> ${esc(S.hold)}. Agents finish their current turn, but nobody goes on call and teammate wakes become plain messages. Your own messages and wakes still work.</span>${paused ? ` <button class="small" onclick="setPaused(false)">Resume</button>` : ` <button class="small" onclick="openTeamSettings()">Change quiet hours</button>`}`);
+  // lead
+  const pendingLead = S.leads.filter((l) => l.status === "pending").at(-1);
+  const lead = S.leads.find((l) => l.status === "approved");
+  $("leadbar").hidden = !pendingLead;
+  if (pendingLead) setHtml($("leadbar"), `<span><b>${esc(pendingLead.name)}</b> wants to be your lead${leadWhere(pendingLead)}. Once approved it can see every team and act as you (messages, wakes, tasks, decisions, pause).</span> <button class="small primary" onclick="leadDo('approve','${pendingLead.id}')">Approve</button> <button class="small ghost" onclick="leadDo('revoke','${pendingLead.id}')">Reject</button>`);
+  $("leadBtn").textContent = lead ? `★ Lead: ${lead.name}` : "☆ Set up your lead";
+  $("leadBtn").onclick = () => openLead();
   const waiting = S.agents.filter((a) => a.approval);
   $("needsBtn").hidden = !waiting.length;
   $("needsBtn").textContent = `${waiting.length} waiting for approval`;
@@ -313,9 +347,9 @@ function render(force) {
   // don't clobber something the user is typing/selecting in
   const main = $("main");
   if (!force && main.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
-  if (!S.teams.length) { main.innerHTML = onboardingHtml(); return; }
-  main.innerHTML = { overview: overviewHtml, tasks: tasksHtml, decisions: decisionsHtml, jobs: jobsHtml, files: filesHtml }[tab]();
-  if (tab === "overview") bindFeed();
+  if (!S.teams.length) { setHtml(main, onboardingHtml()); return; }
+  const html = { overview: overviewHtml, tasks: tasksHtml, decisions: decisionsHtml, jobs: jobsHtml, files: filesHtml }[tab]();
+  if (keepScroll("feed", () => setHtml(main, html)) && tab === "overview") bindFeed();
 }
 
 function onboardingHtml() {
@@ -394,7 +428,7 @@ function bindFeed() {
 
 function describe(e) {
   const msg = e.ref ? S.messages.find((m) => m.id === e.ref) : null;
-  const A = `<b>${esc(who(e.actor))}</b>`, B = `<b>${esc(who(e.target, true))}</b>`;
+  const A = e.via ? `<b>${esc(e.via)}</b> <span class="pill" title="your lead, acting for you">for you</span>` : `<b>${esc(who(e.actor))}</b>`, B = `<b>${esc(who(e.target, true))}</b>`;
   switch (e.kind) {
     case "message": {
       const k = msg?.kind;
@@ -438,11 +472,12 @@ function feedHtml() {
   if (!items.length) return `<div class="empty">Quiet in here… for now.</div>`;
   return items.slice(0, 200).map((e) => {
     const d = describe(e);
-    const icon = d.icon ? `<span class="icon">${d.icon}</span>` : avatar(e.actor || "gang");
-    return `<div class="ev k-${d.k}">${icon}<div class="main">
+    const icon = d.icon ? `<span class="icon">${d.icon}</span>` : avatar(e.via || e.actor || "gang");
+    const open = expanded.has(e.id);
+    return `<div class="ev k-${d.k}" data-key="${e.id}">${icon}<div class="main">
       <div class="row" style="gap:6px;flex-wrap:nowrap"><div class="line grow">${d.line}</div><span class="when" title="${clock(e.ts)}">${ago(e.ts)}</span></div>
       ${d.sub ? `<div class="small muted">${esc(d.sub)}</div>` : ""}
-      ${d.body ? `<div class="body clamp">${md(d.body)}</div><span class="more" onclick="this.previousElementSibling.classList.remove('clamp');this.remove()">Show more</span>` : ""}
+      ${d.body ? `<div class="body ${open ? "" : "clamp"}">${md(d.body)}</div>${open ? "" : `<span class="more" onclick="expanded.add(${e.id});this.previousElementSibling.classList.remove('clamp');this.remove()">Show more</span>`}` : ""}
     </div></div>`;
   }).join("");
 }
@@ -596,14 +631,14 @@ function waitingHtml() {
 function renderInbox() {
   document.querySelectorAll(".msg .reply textarea").forEach((ta) => { if (openReplies.has(Number(ta.dataset.id))) openReplies.set(Number(ta.dataset.id), ta.value); });
   const msgs = S.human.messages;
-  $("inboxBody").innerHTML = waitingHtml() + (msgs.length ? msgs.map((m) => `<div class="msg ${m.read_at ? "" : "unread"}">
+  keepScroll("inboxBody", () => setHtml($("inboxBody"), waitingHtml() + (msgs.length ? msgs.map((m) => `<div class="msg ${m.read_at ? "" : "unread"}" data-key="${m.id}">
       <div class="row" style="flex-wrap:nowrap">${avatar(m.from_agent, true)}<b>${esc(who(m.from_agent))}</b>
         ${m.kind === "finding" ? `<span class="pill find">finding</span>` : m.kind === "decision" ? `<span class="pill">decision</span>` : m.kind === "question" ? `<span class="pill q">question</span>` : m.kind === "approval" ? `<span class="pill q">approval</span>` : m.kind === "guardrail" ? `<span class="pill q">guardrail</span>` : ""}
         <span class="grow"></span><span class="when small faint" title="${clock(m.created)}">${ago(m.created)}</span></div>
       <div style="margin:6px 0 0 32px">${md(m.body)}</div>
       ${m.from_agent !== "gang" && m.from_agent !== "human" && m.kind !== "approval" ? `<div style="margin-left:32px"><button class="small ghost" onclick="toggleReply(${m.id})">Reply</button></div>
       <div class="reply ${openReplies.has(m.id) ? "open" : ""}" style="margin-left:32px"><textarea data-id="${m.id}" placeholder="Reply to ${esc(m.from_agent)}…">${esc(openReplies.get(m.id) ?? "")}</textarea><button class="small primary" onclick="replyTo('${esc(m.from_agent)}', ${m.id}, this)">Send</button></div>` : ""}
-    </div>`).join("") : `<div class="empty">Nothing yet. Messages agents send to “human”, plus team findings and decisions, show up here.</div>`);
+    </div>`).join("") : `<div class="empty">Nothing yet. Messages agents send to “human”, plus team findings and decisions, show up here.</div>`)));
   $("notifBtn").textContent = notifyOn ? "🔔 Notifications on" : "🔕 Notify me";
 }
 function toggleReply(id) { openReplies.has(id) ? openReplies.delete(id) : openReplies.set(id, ""); renderInbox(); document.querySelector(`.reply textarea[data-id="${id}"]`)?.focus(); }
@@ -692,6 +727,32 @@ function readGuardrails() {
   const qs = $("gr_qs").value.trim(), qe = $("gr_qe").value.trim();
   out.quiet_hours = qs && qe ? { start: qs, end: qe } : null;
   return out;
+}
+
+// ---------- lead ----------
+function leadWhere(l) { const bits = [l.app || l.runtime, l.title ? `“${l.title}”` : "", l.cwd ? home(l.cwd) : ""].filter(Boolean); return bits.length ? ` (${esc(bits.join(" · "))})` : ""; }
+async function leadDo(what, id, extra = {}) {
+  await api(`/api/lead/${what}`, { id, ...extra });
+  toast(what === "approve" ? "GANG GANG — your lead is in" : what === "revoke" ? "Lead removed" : "Saved");
+  await refresh(); render(true); if ($("dlg").open && $("dTitle").textContent.startsWith("Your lead")) openLead();
+}
+async function openLead() {
+  const lead = S.leads.find((l) => l.status === "approved");
+  const p = (await (await fetch(`/api/lead-prompt?name=lead`)).json()).prompt;
+  const setup = `<div><label class="field">Paste this into the chat you want as your lead <span class="faint">(Claude or Codex, new or existing, any folder)</span></label>
+      <div class="prompt" id="lPrompt">${esc(p)}</div>
+      <div class="row" style="margin-top:8px"><button class="primary" id="lCopy">Copy prompt</button><span class="small muted" id="lCopied"></span></div></div>
+    <div class="small muted">It asks to become your lead. Approve it from the purple banner here, or run <code>gang lead approve</code>.</div>`;
+  openDialog("Your lead", `<div class="stack">
+    <p class="muted" style="margin:0">Your lead is your own assistant chat above every team. It gets compact briefings (what's new, what needs you) and can do anything you can do here (message, wake, assign tasks, record decisions, pause), labeled <b>via lead</b>. It never starts agents or approves permission prompts.</p>
+    ${lead ? `<div class="card on_call" style="border-top-color:var(--wake)"><div class="head">${avatar(lead.name)}<div class="who"><div class="name">${esc(lead.name)}</div><div class="title">${leadWhere(lead)}</div></div></div>
+      <div class="facts" style="margin-top:6px"><span>approved ${ago(lead.approved)}</span><span>active ${ago(lead.last_seen)}</span></div>
+      <label class="row small" style="margin-top:10px;gap:6px"><input type="checkbox" id="lWake" ${lead.wake_on_needs ? "checked" : ""}> Wake my lead's chat when something needs me (questions to me, approvals waiting, guardrail trips)</label>
+      <div class="actions"><span class="grow"></span><button class="small ghost danger" onclick="leadDo('revoke','${lead.id}')">Remove as lead</button></div></div>
+      <details><summary class="small muted" style="cursor:pointer">Set up a different chat as lead</summary><div class="stack" style="margin-top:10px">${setup}</div></details>`
+    : setup}</div>`);
+  if ($("lWake")) $("lWake").onchange = (e) => leadDo("wake", lead.id, { on: e.target.checked });
+  $("lCopy").onclick = async () => { const ok = await copy(p); $("lCopied").textContent = ok ? "Copied ✓ — paste it into your lead's chat" : "Couldn't copy; select the text above"; };
 }
 
 // ---------- add agent ----------

@@ -22,6 +22,9 @@ const HELP = `GANG GANG! — a cross-agent hub for your Claude Code and Codex se
   gang run [--as <agent>] [--name <n>] [--notify wake|message|none] -- <cmd…>
                              run a long job tracked by the hub (owner gets woken on finish)
   gang jobs | logs <id> | kill <id>
+  gang lead                  show your lead agent (and any pending request to become it)
+  gang lead prompt           print + copy the prompt that makes a chat session your lead
+  gang lead approve | revoke approve a pending lead (or revoke the current one)
   gang pause | resume        stop/allow agent-initiated wakes for this folder's team
   gang autostart on|off      start the hub at login (on by default after init)
   gang start | stop | status manage the background hub (auto-starts when agents use gang)
@@ -115,6 +118,35 @@ async function main(): Promise<number> {
       if (rest[0] === "off") { a.disableAutostart(); console.log("The hub will no longer start at login."); }
       else if (rest[0] === "on") { await stopHub(); a.enableAutostart(node); await waitHealthy(); console.log("The hub now starts at login (and restarts if it crashes)."); }
       else console.log(a.autostartEnabled() ? "on" : "off");
+      return 0;
+    }
+    case "lead": {
+      await client.ensureDaemon();
+      const s = await client.getJson(`${HUB_URL}/api/state`);
+      const leads = s.leads as any[];
+      const sub = rest[0] ?? "status";
+      const describe = (l: any) => `${l.name} (${l.runtime}${l.cwd ? `, ${l.cwd}` : ""}) — ${l.status}${l.wake_on_needs ? ", wakes when something needs you" : ""}`;
+      if (sub === "prompt") {
+        const r = await client.getJson(`${HUB_URL}/api/lead-prompt?name=${encodeURIComponent(rest[1] ?? "lead")}`);
+        console.log(r.prompt);
+        try { (await import("node:child_process")).execFileSync("pbcopy", { input: r.prompt }); console.error("\n(copied — paste it into the chat you want as your lead, new or existing)"); } catch {}
+        return 0;
+      }
+      if (sub === "approve") {
+        const pending = leads.filter((l) => l.status === "pending");
+        if (!pending.length) { console.log("No pending lead. Paste the prompt from `gang lead prompt` into a chat first."); return 1; }
+        const l = pending.at(-1);
+        await client.postJson(`${HUB_URL}/api/lead/approve`, { id: l.id });
+        console.log(`Approved ${describe({ ...l, status: "approved" })}. GANG GANG — your lead is in.`);
+        return 0;
+      }
+      if (sub === "revoke") {
+        for (const l of leads) await client.postJson(`${HUB_URL}/api/lead/revoke`, { id: l.id });
+        console.log(leads.length ? "Lead revoked." : "No lead to revoke.");
+        return 0;
+      }
+      if (!leads.length) console.log("No lead yet. Run `gang lead prompt` and paste it into the chat you want as your lead.");
+      for (const l of leads) console.log(describe(l));
       return 0;
     }
     case "pause": case "resume": {

@@ -38,6 +38,11 @@ export interface Claim {
   id: number; team: string; agent: string; pattern: string; exclusive: number; note: string | null;
   created: number; expires: number; released: number | null;
 }
+export interface Lead {
+  id: string; name: string; runtime: string; session_id: string | null; transcript_path: string | null; cwd: string | null;
+  status: "pending" | "approved" | "revoked"; wake_on_needs: number; seen_activity: number; seen_message: number;
+  noticed_message: number; noticed_activity: number; created: number; approved: number | null; last_seen: number;
+}
 export interface Session {
   session_id: string; runtime: string; cwd: string | null; transcript_path: string | null;
   last_event: string | null; last_seen: number;
@@ -104,6 +109,16 @@ export function openDb(path: string): DatabaseSync {
   ensureColumn(db, "teams", "settings", "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn(db, "agents", "approval", "TEXT");
   ensureColumn(db, "agents", "auto_turns", "INTEGER NOT NULL DEFAULT 0");
+  // v4: the user's lead agent, and "via" labels for things it does on the user's behalf
+  ensureColumn(db, "messages", "via", "TEXT");
+  ensureColumn(db, "wakes", "via", "TEXT");
+  ensureColumn(db, "activity", "via", "TEXT");
+  db.exec(`CREATE TABLE IF NOT EXISTS leads (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, runtime TEXT NOT NULL DEFAULT '', session_id TEXT, transcript_path TEXT,
+    cwd TEXT, status TEXT NOT NULL DEFAULT 'pending', wake_on_needs INTEGER NOT NULL DEFAULT 0,
+    seen_activity INTEGER NOT NULL DEFAULT 0, seen_message INTEGER NOT NULL DEFAULT 0, noticed_message INTEGER NOT NULL DEFAULT 0,
+    created INTEGER NOT NULL, approved INTEGER, last_seen INTEGER NOT NULL);`);
+  ensureColumn(db, "leads", "noticed_activity", "INTEGER NOT NULL DEFAULT 0");
   return db;
 }
 

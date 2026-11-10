@@ -2,7 +2,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, unlink
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { BACKUP_DIR, CLI_PATH } from "./paths.ts";
+import { BACKUP_DIR, CLI_PATH, REPO_DIR } from "./paths.ts";
+import { lstatSync, readlinkSync, symlinkSync } from "node:fs";
 
 const CLAUDE_SETTINGS = join(homedir(), ".claude", "settings.json");
 const CODEX_HOOKS = join(homedir(), ".codex", "hooks.json");
@@ -78,7 +79,22 @@ export function install() {
   toml = toml.replace(/\s*$/, "\n") + `\n# ${MARK} hub (managed by \`gang init\`)\n[mcp_servers.gang]\ncommand = ${JSON.stringify(node)}\n` +
     `args = ${JSON.stringify(["--no-warnings", CLI_PATH, "mcp"])}\n`;
   writeFileSync(CODEX_CONFIG, toml);
+  linkSkills();
   return dir;
+}
+
+/** Link the gang-lead skill into Claude's and Codex's user skill folders (only our own links are ever touched). */
+const SKILL_SRC = join(REPO_DIR, "skills", "gang-lead");
+const SKILL_LINKS = [join(homedir(), ".claude", "skills", "gang-lead"), join(homedir(), ".codex", "skills", "gang-lead")];
+function linkSkills() {
+  for (const link of SKILL_LINKS) {
+    try { if (lstatSync(link).isSymbolicLink()) unlinkSync(link); else continue; } catch {}
+    mkdirSync(join(link, ".."), { recursive: true });
+    symlinkSync(SKILL_SRC, link);
+  }
+}
+function unlinkSkills() {
+  for (const link of SKILL_LINKS) try { if (lstatSync(link).isSymbolicLink() && readlinkSync(link) === SKILL_SRC) unlinkSync(link); } catch {}
 }
 
 function stripCodexMcp(toml: string) {
@@ -97,5 +113,6 @@ export function uninstall() {
     if (onlyOurs) unlinkSync(CODEX_HOOKS); else writeJson(CODEX_HOOKS, ch);
   }
   if (existsSync(CODEX_CONFIG)) writeFileSync(CODEX_CONFIG, stripCodexMcp(readFileSync(CODEX_CONFIG, "utf8")).replace(/\s*$/, "\n"));
+  unlinkSkills();
   return dir;
 }

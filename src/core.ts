@@ -2,7 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { execFile } from "node:child_process";
 import { basename, isAbsolute, resolve } from "node:path";
 import { homedir } from "node:os";
-import type { Agent, Claim, Decision, Message, Session, Status, Task, Team, Wake } from "./db.ts";
+import type { Agent, Claim, Decision, Lead, Message, Session, Status, Task, Team, Wake } from "./db.ts";
+import { randomUUID } from "node:crypto";
 import { now, slug } from "./db.ts";
 import { projectFor } from "./paths.ts";
 import { sessionMeta } from "./meta.ts";
@@ -34,6 +35,10 @@ export type HookResult = { context?: string | null; deny?: string | null };
 export class Core {
   db: DatabaseSync;
   waiters = new Map<string, Waiter>(); // session_id -> pending Stop-hook long-poll
+  leadWaiters = new Map<string, (text: string | null) => void>(); // lead session_id -> Stop-hook long-poll
+  leadNoticedAt = new Map<string, number>(); // lead id -> when it last got a notice (approvals are live state)
+  /** Set while the lead acts on the user's behalf: everything recorded meanwhile is labeled "via <lead>". */
+  via: string | null = null;
   notify: (title: string, body: string) => void;
   metaReader: typeof sessionMeta;
 
@@ -45,8 +50,12 @@ export class Core {
 
   // ---------- activity feed ----------
   activity(team: string, kind: string, actor: string | null, target: string | null, text: string, ref: number | null = null) {
-    this.db.prepare("INSERT INTO activity (team, ts, kind, actor, target, text, ref) VALUES (?,?,?,?,?,?,?)")
-      .run(team, now(), kind, actor, target, text, ref);
+    this.db.prepare("INSERT INTO activity (team, ts, kind, actor, target, text, ref, via) VALUES (?,?,?,?,?,?,?,?)")
+      .run(team, now(), kind, actor, target, text, ref, actor === HUMAN ? this.via : null);
+  }
+  /** How an agent should see a sender: the user, the user via their lead, or a teammate. */
+  senderLabel(m: { from_agent: string; via?: string | null }) {
+    return m.from_agent === HUMAN ? (m.via ? `the user (via their lead ${m.via})` : "the user") : m.from_agent;
   }
 
   // ---------- teams ----------
@@ -121,6 +130,7 @@ export class Core {
     if (recent) return;
     this.db.prepare(`INSERT INTO messages (team, from_agent, to_agent, kind, body, created) VALUES (?,?,?,?,?,?)`).run(team, HUB, HUMAN, "guardrail", text, now());
     this.notify(`gang: guardrail (${key})`, text.slice(0, 180));
+    this.pokeLead(`guardrail in team ${team}: ${oneLine(text, 160)}`);
   }
 
   teamsForPath(path: string): Team[] {
@@ -227,10 +237,13 @@ export class Core {
         throw new Error(`Message limit reached (${lim} per 10 minutes). Combine updates into fewer, fuller messages.`);
       }
     }
-    const r = this.db.prepare(`INSERT INTO messages (team, from_agent, to_agent, kind, body, thread_id, created)
-      VALUES (?,?,?,?,?,?,?)`).run(team, from, to, kind, body, thread_id, now());
+    const r = this.db.prepare(`INSERT INTO messages (team, from_agent, to_agent, kind, body, thread_id, created, via)
+      VALUES (?,?,?,?,?,?,?,?)`).run(team, from, to, kind, body, thread_id, now(), from === HUMAN ? this.via : null);
     const id = Number(r.lastInsertRowid);
-    if (to === HUMAN) this.notify(`gang: ${from} → you`, body.slice(0, 180));
+    if (to === HUMAN) {
+      this.notify(`gang: ${from} → you`, body.slice(0, 180));
+      this.pokeLead(`${from} sent the user a ${kind === "msg" ? "message" : kind} in team ${team}: "${oneLine(body, 140)}"`);
+    }
     const actKind = kind === "finding" ? "finding" : kind === "decision" || kind === "task" ? null : "message";
     if (actKind) this.activity(team, actKind, from, to, body, id);
     return this.db.prepare("SELECT * FROM messages WHERE id=?").get(id) as unknown as Message;
@@ -267,7 +280,7 @@ export class Core {
     if (!fresh.length) return null;
     this.mark(fresh.map((m) => m.id), a.name, "notified_at");
     const total = this.unread(a.team, a.name).length;
-    const lines = fresh.slice(0, 5).map((m) => `- ${m.kind === "wake" ? "WAKE " : m.kind !== "msg" ? m.kind.toUpperCase() + " " : ""}from ${m.from_agent}: "${oneLine(m.body, 90)}"`);
+    const lines = fresh.slice(0, 5).map((m) => `- ${m.kind === "wake" ? "WAKE " : m.kind !== "msg" ? m.kind.toUpperCase() + " " : ""}from ${this.senderLabel(m)}: "${oneLine(m.body, 90)}"`);
     return `[gang] You have ${total} unread team message(s) via the gang hub:\n${lines.join("\n")}\n` +
       `Read them with the gang \`inbox\` tool when you reach a sensible point (now, if urgent).`;
   }
@@ -287,6 +300,8 @@ export class Core {
     if (from !== HUMAN) {
       const hold = this.holdReason(team);
       if (hold) return held("held", hold);
+    }
+    if (from !== HUMAN || this.via) {
       if (target.auto_turns >= st.autonomy_budget)
         return held("budget", `${to} has been woken ${target.auto_turns} times without you`,
           `${to} reached its autonomy budget (${st.autonomy_budget} wakes without you). Wakes are held until you send it a message or wake it yourself.`);
@@ -306,8 +321,8 @@ export class Core {
           `${from} and ${to} have woken each other ${ab}+${ba} times in 30 min; wakes between them are held for now. Check whether they're stuck in a loop.`);
     }
     const msg = this.send(team, from, to, reason, "wake");
-    const r = this.db.prepare(`INSERT INTO wakes (team, from_agent, to_agent, reason, created, exempt) VALUES (?,?,?,?,?,?)`)
-      .run(team, from, to, reason, now(), exempt ? 1 : 0);
+    const r = this.db.prepare(`INSERT INTO wakes (team, from_agent, to_agent, reason, created, exempt, via) VALUES (?,?,?,?,?,?,?)`)
+      .run(team, from, to, reason, now(), exempt ? 1 : 0, from === HUMAN ? this.via : null);
     const wakeId = Number(r.lastInsertRowid);
     const waiter = target.session_id ? this.waiters.get(target.session_id) : undefined;
     let method: string;
@@ -341,10 +356,11 @@ export class Core {
     const unread = this.unread(a.team, a.name);
     this.db.prepare("UPDATE wakes SET delivered_at=?, method=COALESCE(method,'on_call') WHERE team=? AND to_agent=? AND delivered_at IS NULL")
       .run(now(), a.team, a.name);
-    if (wakes.some((w) => w.from_agent === HUMAN)) this.db.prepare("UPDATE agents SET auto_turns=0 WHERE team=? AND name=?").run(a.team, a.name);
+    // only the user in person resets the autonomy budget; the lead acting for them does not
+    if (wakes.some((w) => w.from_agent === HUMAN && !w.via)) this.db.prepare("UPDATE agents SET auto_turns=0 WHERE team=? AND name=?").run(a.team, a.name);
     else this.db.prepare("UPDATE agents SET auto_turns=auto_turns+1 WHERE team=? AND name=?").run(a.team, a.name);
-    const who = [...new Set(wakes.map((w) => w.from_agent))].join(", ") || "a teammate";
-    const reasons = wakes.map((w) => `- ${w.from_agent}: "${oneLine(w.reason, 160)}"`).join("\n");
+    const who = [...new Set(wakes.map((w) => this.senderLabel(w)))].join(", ") || "a teammate";
+    const reasons = wakes.map((w) => `- ${this.senderLabel(w)}: "${oneLine(w.reason, 160)}"`).join("\n");
     this.waiters.delete(a.session_id!);
     this.setStatus(a, "working");
     waiter.resolve(`[gang] You were woken by ${who} via the gang hub (set up by the user).\n${reasons}\n` +
@@ -537,6 +553,20 @@ export class Core {
       transcript_path=COALESCE(excluded.transcript_path, transcript_path), last_event=excluded.last_event, last_seen=excluded.last_seen`)
       .run(sid, runtime, p.cwd ?? null, p.transcript_path ?? null, event, now());
 
+    // The lead: bind on its register call, then give it a one-line notice when the user talks to it.
+    if (event === "PostToolUse" && /gang.*lead$/.test(String(p.tool_name ?? "")) && p.tool_input?.action === "register") {
+      const out = String(typeof p.tool_response === "string" ? p.tool_response : JSON.stringify(p.tool_response ?? ""));
+      const id = out.match(/\\?"lead_id\\?":\s*\\?"([^"\\]+)/)?.[1];
+      if (id) this.bindLeadSession(id, sid, p.transcript_path ?? null);
+    }
+    const lead = this.leadBySession(sid);
+    if (lead) {
+      this.db.prepare("UPDATE leads SET last_seen=?, transcript_path=COALESCE(?, transcript_path) WHERE id=?").run(now(), p.transcript_path ?? null, lead.id);
+      if (event === "UserPromptSubmit" || event === "PostToolUse" || event === "SessionStart") { const w = this.leadWaiters.get(sid); if (w) { this.leadWaiters.delete(sid); w(null); } }
+      if (lead.status === "approved" && (event === "UserPromptSubmit" || event === "SessionStart")) return { context: this.leadNotice(lead) };
+      return {};
+    }
+
     // Claude: bind the session when the agent calls our register tool.
     if (event === "PostToolUse" && /gang.*register$/.test(String(p.tool_name ?? "")) && p.tool_input?.name) {
       const out = String(typeof p.tool_response === "string" ? p.tool_response : JSON.stringify(p.tool_response ?? ""));
@@ -588,6 +618,102 @@ export class Core {
     return {};
   }
 
+  // ---------- the lead (the user's own delegate agent) ----------
+  leads(): Lead[] { return this.db.prepare("SELECT * FROM leads WHERE status != 'revoked' ORDER BY created").all() as unknown as Lead[]; }
+  lead(id: string) { return this.db.prepare("SELECT * FROM leads WHERE id=?").get(id) as Lead | undefined; }
+  activeLead() { return this.db.prepare("SELECT * FROM leads WHERE status='approved' ORDER BY approved DESC LIMIT 1").get() as Lead | undefined; }
+  leadBySession(sid: string | null | undefined) {
+    if (!sid) return undefined;
+    return this.db.prepare("SELECT * FROM leads WHERE session_id=? AND status != 'revoked' ORDER BY (status='approved') DESC, created DESC LIMIT 1").get(sid) as Lead | undefined;
+  }
+  /** A session asks to be the user's lead. Stays pending until the user approves it (dashboard / CLI). */
+  registerLead(p: { name: string; runtime: string; cwd: string; session_id?: string | null }): Lead {
+    const existing = this.leadBySession(p.session_id);
+    if (existing) {
+      this.db.prepare("UPDATE leads SET name=?, last_seen=? WHERE id=?").run(p.name, now(), existing.id);
+      return this.lead(existing.id)!;
+    }
+    const id = randomUUID();
+    this.db.prepare(`INSERT INTO leads (id, name, runtime, session_id, cwd, status, created, last_seen) VALUES (?,?,?,?,?,'pending',?,?)`)
+      .run(id, p.name, p.runtime, p.session_id ?? null, p.cwd, now(), now());
+    this.notify("gang: a session wants to be your lead", `${p.name} (${p.runtime}) — approve it in the dashboard or with \`gang lead approve\``);
+    return this.lead(id)!;
+  }
+  bindLeadSession(id: string, sid: string, transcript: string | null) {
+    const l = this.lead(id);
+    if (!l) return;
+    const prev = this.db.prepare("SELECT * FROM leads WHERE session_id=? AND id != ? AND status='approved'").get(sid, id) as Lead | undefined;
+    this.db.prepare("UPDATE leads SET session_id=?, transcript_path=COALESCE(?, transcript_path) WHERE id=?").run(sid, transcript, id);
+    if (prev) { // same session re-registered (e.g. its MCP server restarted): keep its approval
+      this.db.prepare("UPDATE leads SET status='approved', approved=?, seen_activity=?, seen_message=?, noticed_message=?, wake_on_needs=? WHERE id=?")
+        .run(prev.approved, prev.seen_activity, prev.seen_message, prev.noticed_message, prev.wake_on_needs, id);
+      this.db.prepare("UPDATE leads SET status='revoked' WHERE id=?").run(prev.id);
+    }
+  }
+  approveLead(id: string) {
+    const l = this.lead(id);
+    if (!l) throw new Error("no such lead");
+    const maxA = (this.db.prepare("SELECT COALESCE(MAX(id),0) m FROM activity").get() as any).m;
+    const maxM = (this.db.prepare("SELECT COALESCE(MAX(id),0) m FROM messages").get() as any).m;
+    this.db.prepare("UPDATE leads SET status='revoked' WHERE status='approved' AND id != ?").run(id);
+    this.db.prepare("UPDATE leads SET status='approved', approved=?, seen_activity=?, seen_message=?, noticed_message=? WHERE id=?").run(now(), maxA, maxM, maxM, id);
+    return this.lead(id)!;
+  }
+  revokeLead(id: string) {
+    this.db.prepare("UPDATE leads SET status='revoked' WHERE id=?").run(id);
+    const l = this.lead(id);
+    if (l?.session_id) { const w = this.leadWaiters.get(l.session_id); if (w) { this.leadWaiters.delete(l.session_id); w(null); } }
+  }
+  setLeadWake(id: string, on: boolean) { this.db.prepare("UPDATE leads SET wake_on_needs=? WHERE id=?").run(on ? 1 : 0, id); }
+
+  /** Things that need the user right now, across all teams. */
+  needsYou() {
+    const approvals = (this.db.prepare("SELECT * FROM agents WHERE approval IS NOT NULL").all() as unknown as Agent[]).map((a) => ({ team: a.team, agent: a.name, app: a.app, session_title: a.title, ...JSON.parse(a.approval!) }));
+    const unread = this.db.prepare(`SELECT m.* FROM messages m LEFT JOIN receipts r ON r.message_id=m.id AND r.agent='human'
+      WHERE m.to_agent='human' AND r.read_at IS NULL ORDER BY m.id`).all() as unknown as Message[];
+    return { approvals, unread };
+  }
+  /** One-line hint injected when the user talks to their lead. */
+  leadNotice(lead: Lead): string | null {
+    const l = { ...lead, last_noticed: this.leadNoticedAt.get(lead.id) ?? 0 };
+    const { approvals, unread } = this.needsYou();
+    const fresh = unread.filter((m) => m.id > l.noticed_message);
+    const maxA = (this.db.prepare("SELECT COALESCE(MAX(id),0) m FROM activity").get() as any).m;
+    const otherNew = maxA - Math.max(l.seen_activity, l.noticed_activity);
+    const newApprovals = approvals.filter((x) => x.at > l.last_noticed);
+    if (!fresh.length && !newApprovals.length && otherNew <= 0) return null;
+    const maxM = (this.db.prepare("SELECT COALESCE(MAX(id),0) m FROM messages").get() as any).m;
+    this.db.prepare("UPDATE leads SET noticed_message=?, noticed_activity=? WHERE id=?").run(maxM, maxA, l.id);
+    this.leadNoticedAt.set(l.id, now());
+    const parts = [];
+    if (fresh.length) parts.push(`${fresh.length} new for the user (${[...new Set(fresh.map((m) => `${m.from_agent}${m.kind !== "msg" ? ` ${m.kind}` : ""}`))].slice(0, 4).join(", ")})`);
+    if (approvals.length) parts.push(`${approvals.length} approval(s) waiting (${approvals.map((a) => a.agent).join(", ")})`);
+    if (otherNew > 0) parts.push(`${otherNew} team event(s) since your last brief`);
+    return `[gang] Since your last look: ${parts.join("; ")}. Use the gang \`lead\` tool (action "brief") if it's relevant to what the user is asking.`;
+  }
+  /** Wake the lead (only if the user turned that on) when something needs the user. */
+  pokeLead(text: string) {
+    const l = this.activeLead();
+    if (!l?.wake_on_needs || !l.session_id) return;
+    const w = this.leadWaiters.get(l.session_id);
+    if (!w) return;
+    this.leadWaiters.delete(l.session_id);
+    w(`[gang] Something needs the user: ${text}\nCall the gang \`lead\` tool with action "brief", then tell the user briefly in this chat.`);
+  }
+  leadStopWait(sid: string, timeoutMs: number, onCancel: (cb: () => void) => void): Promise<string | null> {
+    const l = this.leadBySession(sid);
+    if (!l || l.status !== "approved" || !l.wake_on_needs) return Promise.resolve(null);
+    const prev = this.leadWaiters.get(sid);
+    if (prev) { this.leadWaiters.delete(sid); prev(null); }
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (t: string | null) => { if (!done) { done = true; clearTimeout(timer); resolve(t); } };
+      const timer = setTimeout(() => { if (this.leadWaiters.get(sid) === finish) this.leadWaiters.delete(sid); finish(null); }, timeoutMs);
+      onCancel(() => { if (this.leadWaiters.get(sid) === finish) this.leadWaiters.delete(sid); finish(null); });
+      this.leadWaiters.set(sid, finish);
+    });
+  }
+
   // ---------- approvals ----------
   setApproval(a: Agent, detail: string, tool: string | null) {
     const at = now();
@@ -603,6 +729,7 @@ export class Core {
       this.db.prepare(`INSERT INTO messages (team, from_agent, to_agent, kind, body, created) VALUES (?,?,?,?,?,?)`)
         .run(a.team, a.name, HUMAN, "approval", `Waiting ${nudge}s+ for your approval in ${app}${cur.title ? ` (“${cur.title}”)` : ""}: ${detail}`, now());
       this.notify(`gang: ${a.name} needs your approval`, `${detail.slice(0, 120)} — open it in ${app}`);
+      this.pokeLead(`${a.name} (team ${a.team}) has waited ${nudge}s for the user's approval: ${detail}`);
     }, nudge * 1000).unref?.();
   }
   clearApproval(a: Agent) {

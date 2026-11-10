@@ -266,3 +266,92 @@ test("guardrails: max running jobs", () => {
   assert.throws(() => jobs.start({ team: T, owner: "impl", cmd: "true", cwd: process.cwd() }), /limit 1/);
   jobs.kill(j.id);
 });
+
+const { leadAction } = await import("../src/lead.ts");
+function leadSetup() {
+  const ctx = setup();
+  const jobs = new Jobs(ctx.core);
+  const l = ctx.core.registerLead({ name: "lead", runtime: "claude", cwd: "/", session_id: "s-lead" });
+  const deps = { inspectAgent: () => ({ events: [] }), joinPrompt: (p: any) => `join ${p.team} as ${p.name}` };
+  const run = (action: string, a: any = {}) => leadAction(ctx.core, jobs, deps, ctx.core.lead(l.id)!, action, a);
+  return { ...ctx, l, run };
+}
+
+test("lead: pending until approved; one approved lead at a time; re-register keeps approval", () => {
+  const { core, l } = leadSetup();
+  assert.equal(l.status, "pending");
+  core.approveLead(l.id);
+  assert.equal(core.activeLead()!.id, l.id);
+  const l2 = core.registerLead({ name: "lead2", runtime: "codex", cwd: "/", session_id: "s-lead2" });
+  core.approveLead(l2.id);
+  assert.equal(core.lead(l.id)!.status, "revoked");
+  // same session registers again without a session id (Claude), then the hook binds it → approval carries over
+  const again = core.registerLead({ name: "lead2", runtime: "codex", cwd: "/" });
+  core.bindLeadSession(again.id, "s-lead2", null);
+  assert.equal(core.lead(again.id)!.status, "approved");
+  assert.equal(core.lead(l2.id)!.status, "revoked");
+});
+
+test("lead: acts as the user, labeled via lead; agents see the label; budget not reset by lead", async () => {
+  const { core, T, l, run } = leadSetup();
+  core.approveLead(l.id);
+  run("send", { to: "impl", body: "please prioritise the 8k sweep" });
+  const m = core.inbox(T, "impl").at(-1)!;
+  assert.equal(m.from_agent, "human");
+  assert.equal((m as any).via, "lead");
+  assert.match(core.senderLabel(m as any), /the user \(via their lead lead\)/);
+  const act = core.db.prepare("SELECT * FROM activity WHERE team=? AND kind='message' ORDER BY id DESC LIMIT 1").get(T) as any;
+  assert.equal(act.via, "lead");
+  // lead wakes increment the autonomy budget and are held when it's spent
+  core.updateSettings(T, { autonomy_budget: 1 });
+  const p = core.stopWait("s-impl", 5000, never);
+  run("wake", { to: "impl", reason: "go" });
+  assert.match((await p)!, /the user \(via their lead lead\)/);
+  assert.equal(core.agent(T, "impl")!.auto_turns, 1);
+  assert.equal(run("wake", { to: "impl", reason: "again" }).method, "budget");
+  assert.equal(core.via, null, "via label is cleared after acting");
+});
+
+test("lead: brief shows what needs the user and only deltas", () => {
+  const { core, T, l, run } = leadSetup();
+  core.approveLead(l.id);
+  core.send(T, "impl", "human", "should I use 8192 for all seeds?", "question");
+  core.send(T, "impl", "*", "loader leak inflates acc by 0.8pt", "finding");
+  core.hookEvent("claude", "PermissionRequest", { session_id: "s-plan", cwd: "/repo", tool_name: "Bash", tool_input: { command: "make clean" } });
+  const b = run("brief");
+  assert.match(b.needs_user.messages[0], /impl → user \[question\].*8192/);
+  assert.match(b.needs_user.approvals[0], /planner .*run `make clean`/);
+  assert.match(b.teams[0].new_since_last_brief.findings[0], /leak/);
+  const b2 = run("brief");
+  assert.equal(b2.teams[0].new_since_last_brief, undefined, "nothing new the second time");
+  assert.equal(b2.needs_user.messages.length, 1, "still unread → still needs the user");
+  run("reply", { id: core.unread(T, "human")[0].id, body: "yes, 8192" });
+  assert.equal(core.needsYou().unread.length, 0);
+  assert.match(core.inbox(T, "impl").at(-1)!.body, /yes, 8192/);
+});
+
+test("lead: notice on the user's turn; optional wake when something needs the user", async () => {
+  const { core, T, l } = leadSetup();
+  core.approveLead(l.id);
+  core.send(T, "impl", "human", "done with the loader fix");
+  const r = core.hookEvent("claude", "UserPromptSubmit", { session_id: "s-lead", prompt: "what's up?" });
+  assert.match(r.context!, /1 new for the user \(impl\)/);
+  assert.equal(core.hookEvent("claude", "UserPromptSubmit", { session_id: "s-lead", prompt: "and now?" }).context ?? null, null);
+  assert.equal(await core.leadStopWait("s-lead", 1000, never), null, "wake is off by default");
+  core.setLeadWake(l.id, true);
+  const w = core.leadStopWait("s-lead", 5000, never);
+  core.send(T, "planner", "human", "need a decision on seeds", "question");
+  assert.match((await w)!, /planner sent the user a question/);
+});
+
+test("lead: unapproved or non-lead callers are refused by the server rpc", async () => {
+  const { createHub } = await import("../src/server.ts");
+  const hub = createHub({ dbPath: join(process.env.GANG_HOME!, `rpc${Math.random()}.db`), notify: () => {}, metaReader: noMeta });
+  const reg = hub.rpc("lead", { action: "register", name: "lead" }, { runtime: "codex", cwd: "/", session_id: "L1" });
+  assert.equal(reg.status, "pending");
+  assert.throws(() => hub.rpc("lead", { action: "brief" }, { session_id: "L1" }), /Waiting for the user to approve/);
+  assert.throws(() => hub.rpc("lead", { action: "brief" }, { session_id: "someone-else" }), /isn't the user's lead/);
+  hub.core.approveLead(reg.lead_id);
+  assert.ok(hub.rpc("lead", { action: "brief" }, { session_id: "L1" }).needs_user);
+  assert.match(hub.rpc("lead", { action: "help" }, {}), /gang lead tool/);
+});

@@ -3,12 +3,14 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { HUB_URL } from "./paths.ts";
 import { ensureDaemon, postJson } from "./client.ts";
+import { LEAD_ACTIONS } from "./lead.ts";
 
 /** stdio MCP server started by Claude Code / Codex; forwards every tool call to the hub. */
 export async function runMcp() {
   const cwd = process.cwd();
   let myName: string | null = null;
   let myTeam: string | null = null;
+  let leadId: string | null = null;
   const server = new McpServer({ name: "gang", version: "0.1.0" }, {
     instructions: "gang: team hub for coordinating with other coding agents on this repo. Only use it after the user " +
       "has asked you to join a gang team (they give you a name and role). [gang] notices come from this hub.",
@@ -24,10 +26,11 @@ export async function runMcp() {
     const sid = meta["x-codex-turn-metadata"]?.session_id ?? null;
     await ensureDaemon();
     const r = await postJson(`${HUB_URL}/rpc`, {
-      tool, args, ctx: { runtime: runtime(), cwd, session_id: sid, name: sid ? null : myName, team: sid ? null : myTeam },
+      tool, args, ctx: { runtime: runtime(), cwd, session_id: sid, name: sid ? null : myName, team: sid ? null : myTeam, lead_id: leadId },
     });
     if (!r.ok) return { isError: true, content: [{ type: "text" as const, text: `gang: ${r.error}` }] };
     if (tool === "register") { myName = String(args.name); myTeam = r.result.team_id; }
+    if (tool === "lead" && args.action === "register") leadId = r.result.lead_id;
     const text = typeof r.result === "string" ? r.result : JSON.stringify(r.result, null, 2);
     return { content: [{ type: "text" as const, text }] };
   }
@@ -71,6 +74,18 @@ export async function runMcp() {
       minutes: z.number().int().optional(), exclusive: z.boolean().optional() });
   tool("release", "Release your file claims (all of them if paths is omitted).", { paths: z.array(z.string()).optional() });
   tool("claims", "List active file claims in the team.", {});
+
+  tool("lead", "ONLY for the user's own lead agent (their assistant above all gang teams), and only if the user asked you to be it. " +
+    "Briefings on all agents and acting as the user. Start with action \"register\", then \"help\" for the full action list.",
+    { action: z.enum(LEAD_ACTIONS as unknown as [string, ...string[]]), team: z.string().optional(), agent: z.string().optional(),
+      to: z.string().optional(), body: z.string().optional(), reason: z.string().optional(), id: z.number().int().optional(),
+      ids: z.array(z.number().int()).optional(), name: z.string().optional(), role: z.string().optional(), title: z.string().optional(),
+      status: z.string().optional(), owner: z.string().optional(), note: z.string().optional(), kind: z.string().optional(),
+      view: z.string().optional(), limit: z.number().int().optional(), before_id: z.number().int().optional(),
+      depends_on: z.array(z.number().int()).optional(), supersedes: z.number().int().optional(), reply_to: z.number().int().optional(),
+      cmd: z.string().optional(), cwd: z.string().optional(), folders: z.array(z.string()).optional(), lines: z.number().int().optional(),
+      wake: z.boolean().optional(), on: z.boolean().optional(), peek: z.boolean().optional(), all: z.boolean().optional(),
+      existing: z.boolean().optional(), filter: z.string().optional(), settings: z.record(z.string(), z.any()).optional() });
 
   await server.connect(new StdioServerTransport());
 }

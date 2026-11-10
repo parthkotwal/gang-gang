@@ -175,3 +175,31 @@ test("approvals + pause through the real hook script", async () => {
   assert.match(s.hold, /paused/);
   await fetch(`${URL}/api/teams/pause`, { method: "POST", body: JSON.stringify({ team: TEAM, paused: false }) });
 });
+
+test("lead: register → approve → brief → act as the user, through real MCP + hook processes", async () => {
+  const leadClient = await mcp("claude-code");
+  try {
+  const reg = await callTool(leadClient, "lead", { action: "register", name: "lead" });
+  assert.equal(reg.status, "pending");
+  await assert.rejects(callTool(leadClient, "lead", { action: "brief" }), /approve/);
+  // Claude binds the lead session via the PostToolUse hook carrying lead_id
+  await hook("claude", "PostToolUse", { session_id: "lead-sess", tool_name: "mcp__gang__lead", tool_input: { action: "register", name: "lead" },
+    tool_response: [{ type: "text", text: JSON.stringify(reg) }] });
+  let s = await state();
+  assert.equal(s.leads.find((l: any) => l.id === reg.lead_id).session_id, "lead-sess");
+  await fetch(`${URL}/api/lead/approve`, { method: "POST", body: JSON.stringify({ id: reg.lead_id }) });
+
+  await callTool(codex, "send", { to: "human", body: "which seed range for the sweep?", kind: "question" }, "codex-sess");
+  const notice = await hook("claude", "UserPromptSubmit", { session_id: "lead-sess", prompt: "anything need me?" });
+  assert.match(JSON.parse(notice.out).hookSpecificOutput.additionalContext, /new for the user \(impl question\)/);
+  const brief = await callTool(leadClient, "lead", { action: "brief" });
+  assert.ok(brief.needs_user.messages.some((m: string) => /seed range/.test(m)));
+  const qid = Number(brief.needs_user.messages.find((m: string) => /seed range/.test(m)).match(/^#(\d+)/)[1]);
+  await callTool(leadClient, "lead", { action: "reply", id: qid, body: "seeds 1-3" });
+  const inbox = await callTool(codex, "inbox", {}, "codex-sess");
+  const reply = inbox.find((m: any) => m.body === "seeds 1-3");
+  assert.match(reply.from, /the user \(via their lead lead\)/);
+  s = await state();
+  assert.ok(s.activity.some((a: any) => a.via === "lead" && a.kind === "message"));
+  } finally { await leadClient.close(); }
+});

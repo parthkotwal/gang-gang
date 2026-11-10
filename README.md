@@ -53,6 +53,22 @@ Afterwards, run `gang up` in any project folder to start a team there.
 - Sessions opened **before** gang was installed need reopening to get the gang tools.
 - `gang autostart off` turns off the login item, and `gang uninstall` removes everything (the DB is kept).
 
+## Your lead 🤙
+Your **lead** is your own assistant chat (Claude or Codex, any folder) that sits above every team. Ask it "anything need
+me?" or "tell impl-1 to rerun with 8192" and it handles it, with no copying between the dashboard and the chat.
+- **Set up:** run `gang lead prompt` (or click "☆ Set up your lead" in the dashboard) and paste the prompt into that chat.
+  It asks to become your lead, and you approve it from the purple banner or with `gang lead approve`. Only one lead is
+  active at a time; `gang lead revoke` removes it.
+- **One `lead` tool:** it has the same powers as you in the dashboard (read everything; message, wake, tasks, decisions,
+  pause, settings, jobs, join prompts). Responses are compact: `brief` returns only what changed since the last brief,
+  plus anything waiting on you. The `gang-lead` skill (linked into `~/.claude/skills` and `~/.codex/skills`) teaches it
+  to stay lean and confirm big actions.
+- **As you, but labeled:** everything it does shows as *via lead*. Agents treat its messages as yours for coordination;
+  anything destructive or out of scope still needs you directly. Its wakes count toward an agent's autonomy budget, and
+  only you talking to an agent resets that budget. It never starts agents or answers permission prompts.
+- **Heads-ups:** when you message it, it gets a one-line note about anything new. Optionally (in the lead dialog, or with
+  its `set_wake` action), the hub wakes its chat when something needs you.
+
 ## Approvals
 When an agent hits a permission prompt (Claude and Codex `PermissionRequest` hooks), its card shows **what** it wants to do,
 for example "run `pip install …`", and which app and session to open. The header shows "N waiting for approval". If it
@@ -99,6 +115,8 @@ The CLI mirrors this: `gang new <team> [folders…]`, `gang teams`, `gang join <
 
 ## Layout
 - `src/core.ts`: hub logic (teams, agents, messages, wakes, tasks, decisions, claims, hooks)
+- `src/lead.ts`: the lead's tool (briefings, acting as you) and its join prompt
+- `skills/gang-lead/`: the lead skill
 - `src/meta.ts`: session titles, models and app info from Codex's state DB and Claude transcripts
 - `src/jobs.ts`: job runner
 - `src/server.ts`: HTTP API, join prompts, dashboard server
