@@ -24,7 +24,8 @@ const HELP = `GANG GANG! — a cross-agent hub for your Claude Code and Codex se
   gang jobs | logs <id> | kill <id>
   gang lead                  show your lead agent (and any pending request to become it)
   gang lead prompt           print + copy the prompt that makes a chat session your lead
-  gang lead approve | revoke approve a pending lead (or revoke the current one)
+  gang lead approve [id]     approve a pending lead (id needed if several are waiting)
+  gang lead revoke           remove your lead (and reject pending requests)
   gang pause | resume        stop/allow agent-initiated wakes for this folder's team
   gang autostart on|off      start the hub at login (on by default after init)
   gang start | stop | status manage the background hub (auto-starts when agents use gang)
@@ -135,8 +136,16 @@ async function main(): Promise<number> {
       if (sub === "approve") {
         const pending = leads.filter((l) => l.status === "pending");
         if (!pending.length) { console.log("No pending lead. Paste the prompt from `gang lead prompt` into a chat first."); return 1; }
-        const l = pending.at(-1);
-        await client.postJson(`${HUB_URL}/api/lead/approve`, { id: l.id });
+        const l = rest[1] ? pending.find((x) => x.id === rest[1] || x.id.startsWith(rest[1])) : pending.length === 1 ? pending[0] : null;
+        if (!l) {
+          console.log(rest[1] ? `No pending lead matches "${rest[1]}".` : "Several sessions want to be your lead. Approve one by id:");
+          for (const x of pending) console.log(`  gang lead approve ${x.id.slice(0, 8)}   ${describe(x)}`);
+          return 1;
+        }
+        const cur = leads.find((x) => x.status === "approved");
+        const r = await client.postJson(`${HUB_URL}/api/lead/approve`, { id: l.id });
+        if (r?.error) { console.error(`gang: ${r.error}`); return 1; }
+        if (cur) console.log(`Replaced your previous lead, ${describe(cur)}.`);
         console.log(`Approved ${describe({ ...l, status: "approved" })}. GANG GANG — your lead is in.`);
         return 0;
       }

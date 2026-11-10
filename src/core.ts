@@ -557,9 +557,9 @@ export class Core {
     if (event === "PostToolUse" && /gang.*lead$/.test(String(p.tool_name ?? "")) && p.tool_input?.action === "register") {
       const out = String(typeof p.tool_response === "string" ? p.tool_response : JSON.stringify(p.tool_response ?? ""));
       const id = out.match(/\\?"lead_id\\?":\s*\\?"([^"\\]+)/)?.[1];
-      if (id) this.bindLeadSession(id, sid, p.transcript_path ?? null);
+      if (id && !this.agentBySession(sid)) this.bindLeadSession(id, sid, p.transcript_path ?? null);
     }
-    const lead = this.leadBySession(sid);
+    const lead = this.leadSession(sid);
     if (lead) {
       this.db.prepare("UPDATE leads SET last_seen=?, transcript_path=COALESCE(?, transcript_path) WHERE id=?").run(now(), p.transcript_path ?? null, lead.id);
       if (event === "UserPromptSubmit" || event === "PostToolUse" || event === "SessionStart") { const w = this.leadWaiters.get(sid); if (w) { this.leadWaiters.delete(sid); w(null); } }
@@ -622,6 +622,8 @@ export class Core {
   leads(): Lead[] { return this.db.prepare("SELECT * FROM leads WHERE status != 'revoked' ORDER BY created").all() as unknown as Lead[]; }
   lead(id: string) { return this.db.prepare("SELECT * FROM leads WHERE id=?").get(id) as Lead | undefined; }
   activeLead() { return this.db.prepare("SELECT * FROM leads WHERE status='approved' ORDER BY approved DESC LIMIT 1").get() as Lead | undefined; }
+  /** The lead bound to this session, unless the session is also a team agent (agent behavior always wins). */
+  leadSession(sid: string | null | undefined) { return sid && !this.agentBySession(sid) ? this.leadBySession(sid) : undefined; }
   leadBySession(sid: string | null | undefined) {
     if (!sid) return undefined;
     return this.db.prepare("SELECT * FROM leads WHERE session_id=? AND status != 'revoked' ORDER BY (status='approved') DESC, created DESC LIMIT 1").get(sid) as Lead | undefined;
@@ -653,6 +655,7 @@ export class Core {
   approveLead(id: string) {
     const l = this.lead(id);
     if (!l) throw new Error("no such lead");
+    if (l.status !== "pending") throw new Error(l.status === "approved" ? "that session is already your lead" : "that lead request was rejected or revoked; ask the session to register again");
     const maxA = (this.db.prepare("SELECT COALESCE(MAX(id),0) m FROM activity").get() as any).m;
     const maxM = (this.db.prepare("SELECT COALESCE(MAX(id),0) m FROM messages").get() as any).m;
     this.db.prepare("UPDATE leads SET status='revoked' WHERE status='approved' AND id != ?").run(id);
@@ -679,7 +682,8 @@ export class Core {
     const { approvals, unread } = this.needsYou();
     const fresh = unread.filter((m) => m.id > l.noticed_message);
     const maxA = (this.db.prepare("SELECT COALESCE(MAX(id),0) m FROM activity").get() as any).m;
-    const otherNew = maxA - Math.max(l.seen_activity, l.noticed_activity);
+    // the lead's own actions (labeled via) aren't news to it
+    const otherNew = (this.db.prepare("SELECT COUNT(*) n FROM activity WHERE id > ? AND via IS NULL").get(Math.max(l.seen_activity, l.noticed_activity)) as any).n;
     const newApprovals = approvals.filter((x) => x.at > l.last_noticed);
     if (!fresh.length && !newApprovals.length && otherNew <= 0) return null;
     const maxM = (this.db.prepare("SELECT COALESCE(MAX(id),0) m FROM messages").get() as any).m;

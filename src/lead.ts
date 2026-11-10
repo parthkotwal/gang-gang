@@ -15,6 +15,7 @@ export const LEAD_ACTIONS = [
 export const LEAD_HELP = `gang lead tool — you act for the user across all their gang teams. Call with {action, ...}.
 Read (cheap first, drill down only as needed):
   brief {team?, peek?}            what's new since your last brief + what needs the user (approvals, questions). Start here.
+                                  (only a full brief, without team or peek, marks things as seen)
   teams                           teams, folders, agent counts, on-hold state
   inspect {team?, agent, view?}   one agent: status, session/app, tasks, claims, jobs, findings, recent actions
   transcript {team?, agent, limit?}  that agent's recent conversation (max 60 events)
@@ -52,9 +53,9 @@ export function leadAction(core: Core, jobs: Jobs, deps: { inspectAgent: Functio
     return `${x.name} (${x.role}, ${x.app ?? x.runtime}${x.title ? ` “${clip(x.title, 40)}”` : ""}) ${x.status}${x.status_text ? ` — ${clip(x.status_text, 90)}` : ""}` +
       `${core.unread(x.team, x.name).length ? ` [${core.unread(x.team, x.name).length} unread]` : ""}${appr}`;
   };
-  const msgLine = (m: Message & { via?: string | null }) =>
+  const msgLine = (m: Message & { via?: string | null }, full = false) =>
     `#${m.id} ${m.from_agent === HUMAN ? (m.via ? `user via ${m.via}` : "user") : m.from_agent} → ${m.to_agent === "*" ? "everyone" : m.to_agent === HUMAN ? "user" : m.to_agent}` +
-    `${m.kind !== "msg" ? ` [${m.kind}]` : ""}${m.thread_id ? ` (re #${m.thread_id})` : ""} ${ago(m.created)}: ${clip(m.body, 300)}`;
+    `${m.kind !== "msg" ? ` [${m.kind}]` : ""}${m.thread_id ? ` (re #${m.thread_id})` : ""} ${ago(m.created)}: ${full ? String(m.body ?? "").slice(0, 4000) : clip(m.body, 300)}`;
 
   switch (action) {
     case "help": return LEAD_HELP;
@@ -62,7 +63,7 @@ export function leadAction(core: Core, jobs: Jobs, deps: { inspectAgent: Functio
     case "set_wake": core.setLeadWake(lead.id, !!a.on); return { wake_on_needs: !!a.on };
 
     case "brief": {
-      const teams = a.team ? [core.team(a.team)!].filter(Boolean) : core.teams().filter((t) => core.agents(t.id).length);
+      const teams = a.team ? [core.team(teamOf(a.team))!] : core.teams().filter((t) => core.agents(t.id).length);
       const { approvals, unread } = core.needsYou();
       const db = core.db;
       const out: any = {
@@ -101,7 +102,8 @@ export function leadAction(core: Core, jobs: Jobs, deps: { inspectAgent: Functio
         if (Object.keys(nw).length) entry.new_since_last_brief = nw;
         out.teams.push(entry);
       }
-      if (!a.peek) {
+      // Read marks are global, so only a full brief moves them; a one-team brief would hide other teams' news.
+      if (!a.peek && !a.team) {
         const maxA = (db.prepare("SELECT COALESCE(MAX(id),0) m FROM activity").get() as any).m;
         const maxM = (db.prepare("SELECT COALESCE(MAX(id),0) m FROM messages").get() as any).m;
         db.prepare("UPDATE leads SET seen_activity=?, seen_message=?, noticed_message=?, noticed_activity=? WHERE id=?").run(maxA, maxM, maxM, maxA, lead.id);
@@ -131,7 +133,7 @@ export function leadAction(core: Core, jobs: Jobs, deps: { inspectAgent: Functio
       if (!root) throw new Error(`no message #${a.id}`);
       const top = root.thread_id ? core.db.prepare("SELECT * FROM messages WHERE id=?").get(root.thread_id) as any ?? root : root;
       const replies = core.db.prepare("SELECT * FROM messages WHERE thread_id=? ORDER BY id").all(top.id) as any[];
-      return [top, ...replies].map((m) => msgLine(m).replace(clip(m.body, 300), m.body.slice(0, 4000)));
+      return [top, ...replies].map((m) => msgLine(m, true));
     }
     case "inbox": {
       const rows = core.db.prepare(`SELECT m.*, r.read_at FROM messages m LEFT JOIN receipts r ON r.message_id=m.id AND r.agent='human'

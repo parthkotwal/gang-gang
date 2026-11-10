@@ -89,12 +89,14 @@ export function createHub(opts: { dbPath?: string; notify?: (t: string, b: strin
   function rpc(tool: string, args: any, ctx: RpcCtx): any {
     if (tool === "lead") {
       if (args.action === "register") {
+        if (ctx.name || core.agentBySession(ctx.session_id))
+          throw new Error("This session is a gang team agent, so it can't also be the user's lead. The lead must be a separate chat.");
         const l = core.registerLead({ name: args.name || "lead", runtime: ctx.runtime ?? "unknown", cwd: ctx.cwd ?? "/", session_id: ctx.session_id });
         return { lead_id: l.id, status: l.status, note: l.status === "approved" ? "You're the user's approved lead. Call action \"help\" once, then \"brief\"."
           : "Pending: ask the user to approve you in the gang dashboard (or run `gang lead approve`). Then call action \"help\"." };
       }
       if (args.action === "help") return LEAD_HELP;
-      const l = core.leadBySession(ctx.session_id) ?? (ctx.lead_id ? core.lead(ctx.lead_id) : undefined);
+      const l = core.leadSession(ctx.session_id) ?? (ctx.lead_id ? core.lead(ctx.lead_id) : undefined);
       if (!l || l.status === "revoked") throw new Error("This session isn't the user's lead. Call lead with action \"register\" first (only if the user asked you to be their lead).");
       if (l.status !== "approved") throw new Error("Waiting for the user to approve you as lead (dashboard banner, or `gang lead approve`).");
       core.db.prepare("UPDATE leads SET last_seen=? WHERE id=?").run(now(), l.id);
@@ -215,7 +217,7 @@ export function createHub(opts: { dbPath?: string; notify?: (t: string, b: strin
       if (req.method === "POST" && url.pathname === "/stop-wait") {
         const b = await body(req);
         core.hookEvent(b.runtime, "Stop", b.payload ?? {});
-        if (core.leadBySession(b.payload?.session_id)) {
+        if (core.leadSession(b.payload?.session_id)) {
           const t = await core.leadStopWait(b.payload.session_id, Number(b.timeout_ms ?? 3_500_000), (cb) => res.on("close", cb));
           if (!res.writableEnded && !res.destroyed) send(res, 200, { text: t });
           return;

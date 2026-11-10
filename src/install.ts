@@ -88,7 +88,12 @@ const SKILL_SRC = join(REPO_DIR, "skills", "gang-lead");
 const SKILL_LINKS = [join(homedir(), ".claude", "skills", "gang-lead"), join(homedir(), ".codex", "skills", "gang-lead")];
 function linkSkills() {
   for (const link of SKILL_LINKS) {
-    try { if (lstatSync(link).isSymbolicLink()) unlinkSync(link); else continue; } catch {}
+    try {
+      // replace only our own link (or a dangling one, e.g. from a moved checkout); leave anything else alone
+      if (!lstatSync(link).isSymbolicLink()) continue;
+      if (readlinkSync(link) !== SKILL_SRC && existsSync(link)) continue;
+      unlinkSync(link);
+    } catch {}
     mkdirSync(join(link, ".."), { recursive: true });
     symlinkSync(SKILL_SRC, link);
   }

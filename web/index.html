@@ -255,7 +255,7 @@ async function copy(text) {
 async function api(path, body) {
   const r = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ team, ...body }) } : {});
   const j = await r.json();
-  if (j && j.error) { toast(j.error); throw new Error(j.error); }
+  if (j && j.error) { toast(j.error); throw Object.assign(new Error(j.error), { shown: true }); }
   return j;
 }
 const agentByName = (n) => S?.agents.find((a) => a.name === n);
@@ -272,11 +272,18 @@ function syncUrl() { const p = new URLSearchParams(); if (team) p.set("team", te
 document.querySelectorAll("#tabs button").forEach((b) => b.onclick = () => setTab(b.dataset.tab));
 
 // ---------- data ----------
+// The 2s timer and action handlers both call refresh(); drop a response if a newer request already
+// landed, or if the user switched teams while it was in flight, so stale state never overwrites newer state.
+let refreshSeq = 0, refreshApplied = 0;
 async function refresh() {
+  const seq = ++refreshSeq, asked = team;
+  let next;
   try {
-    S = await (await fetch(`/api/state?team=${encodeURIComponent(team)}`)).json();
+    next = await (await fetch(`/api/state?team=${encodeURIComponent(asked)}`)).json();
     $("hubState").innerHTML = `<span class="hubdot"></span>hub`;
   } catch { $("hubState").innerHTML = `<span class="hubdot off"></span>hub offline`; return; }
+  if (seq < refreshApplied || team !== asked) return;
+  refreshApplied = seq; S = next;
   if (S.team && team !== S.team) { team = S.team; syncUrl(); }
   notifyNew();
   render(false);
@@ -312,6 +319,26 @@ function keepScroll(id, fn) {
   }
   return r;
 }
+// Re-rendering #main rebuilds its forms; carry over what the user typed/picked (by element id) so drafts
+// in fields that aren't focused survive. Not across teams: a draft for one team must not follow you to another.
+function snapForm(root) {
+  const s = {};
+  root.querySelectorAll("input[id]:not([type=hidden]), textarea[id], select[id]").forEach((el) => {
+    s[el.id] = el.type === "checkbox" ? el.checked : el.multiple ? [...el.selectedOptions].map((o) => o.value) : el.value;
+  });
+  return s;
+}
+function restoreForm(root, s) {
+  for (const [id, v] of Object.entries(s)) {
+    const el = root.querySelector(`#${CSS.escape(id)}`);
+    if (!el) continue;
+    if (el.type === "checkbox") el.checked = v;
+    else if (el.multiple) [...el.options].forEach((o) => o.selected = v.includes(o.value));
+    else if (el.tagName === "SELECT") { if ([...el.options].some((o) => o.value === v)) el.value = v; }
+    else el.value = v;
+  }
+}
+let formTeam = null;
 const expanded = new Set(); // activity ids whose "Show more" was clicked
 function render(force) {
   if (!S) return;
@@ -332,8 +359,11 @@ function render(force) {
   // lead
   const pendingLead = S.leads.filter((l) => l.status === "pending").at(-1);
   const lead = S.leads.find((l) => l.status === "approved");
+  const nPending = S.leads.filter((l) => l.status === "pending").length;
   $("leadbar").hidden = !pendingLead;
-  if (pendingLead) setHtml($("leadbar"), `<span><b>${esc(pendingLead.name)}</b> wants to be your lead${leadWhere(pendingLead)}. Once approved it can see every team and act as you (messages, wakes, tasks, decisions, pause).</span> <button class="small primary" onclick="leadDo('approve','${pendingLead.id}')">Approve</button> <button class="small ghost" onclick="leadDo('revoke','${pendingLead.id}')">Reject</button>`);
+  if (pendingLead) setHtml($("leadbar"), `<span><b>${esc(pendingLead.name)}</b> wants to be your lead${leadWhere(pendingLead)}. Once approved it can see every team and act as you (messages, wakes, tasks, decisions, pause).` +
+    `${lead ? ` <b>Approving replaces your current lead, ${esc(lead.name)}${leadWhere(lead)}.</b>` : ""}${nPending > 1 ? ` <span class="faint">(${nPending - 1} more request${nPending > 2 ? "s" : ""} after this)</span>` : ""}</span>` +
+    ` <button class="small primary" onclick="leadDo('approve','${pendingLead.id}')">${lead ? "Approve & replace" : "Approve"}</button> <button class="small ghost" onclick="leadDo('reject','${pendingLead.id}')">Reject</button>`);
   $("leadBtn").textContent = lead ? `★ Lead: ${lead.name}` : "☆ Set up your lead";
   $("leadBtn").onclick = () => openLead();
   const waiting = S.agents.filter((a) => a.approval);
@@ -349,7 +379,14 @@ function render(force) {
   if (!force && main.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
   if (!S.teams.length) { setHtml(main, onboardingHtml()); return; }
   const html = { overview: overviewHtml, tasks: tasksHtml, decisions: decisionsHtml, jobs: jobsHtml, files: filesHtml }[tab]();
-  if (keepScroll("feed", () => setHtml(main, html)) && tab === "overview") bindFeed();
+  const drafts = formTeam === S.team ? snapForm(main) : {};
+  formTeam = S.team;
+  // bindFeed unclamps short items (changing heights), so it must run before keepScroll restores the view
+  keepScroll("feed", () => {
+    if (!setHtml(main, html)) return;
+    restoreForm(main, drafts);
+    if (tab === "overview") bindFeed();
+  });
 }
 
 function onboardingHtml() {
@@ -510,6 +547,7 @@ function tasksHtml() {
 async function addTask() {
   const title = $("tTitle").value.trim(); if (!title) return;
   await api("/api/task/add", { title, body: $("tBody").value.trim() || undefined, owner: $("tOwner").value || null, depends_on: [...$("tDeps").selectedOptions].map((o) => Number(o.value)) });
+  $("tTitle").value = ""; $("tBody").value = ""; $("tOwner").selectedIndex = 0; [...$("tDeps").options].forEach((o) => o.selected = false);
   toast("Task added"); await refresh(); render(true);
 }
 async function taskUpdate(id, p) { await api("/api/task/update", { id, ...p }); await refresh(); render(true); }
@@ -528,12 +566,14 @@ function decisionsHtml() {
     <section class="panel"><h2>Record a decision</h2>
       <input id="dTitleIn" style="width:100%" placeholder="e.g. Use seeds 1–3 for every run">
       <textarea id="dBodyIn" rows="4" style="width:100%;margin-top:8px" placeholder="Why / details (optional)"></textarea>
-      <input type="hidden" id="dSup"><div class="row" style="margin-top:8px"><span class="small muted" id="dSupLbl"></span><span class="grow"></span><button class="primary" onclick="addDecision()">Record & notify team</button></div></section></div>`;
+      <div class="row" style="margin-top:8px"><span class="small muted" id="dSupLbl">${supersedeId ? `Replaces #${supersedeId} <button class="small ghost" onclick="supersede(null)">×</button>` : ""}</span><span class="grow"></span><button class="primary" onclick="addDecision()">Record & notify team</button></div></section></div>`;
 }
-function supersede(id) { $("dSup").value = id; $("dSupLbl").textContent = `Replaces #${id}`; $("dTitleIn").focus(); }
+let supersedeId = null; // decision being replaced by the one in the form
+function supersede(id) { supersedeId = id; render(true); if (id) $("dTitleIn").focus(); }
 async function addDecision() {
   const title = $("dTitleIn").value.trim(); if (!title) return;
-  await api("/api/decision/add", { title, body: $("dBodyIn").value.trim(), supersedes: Number($("dSup").value) || null });
+  await api("/api/decision/add", { title, body: $("dBodyIn").value.trim(), supersedes: supersedeId });
+  $("dTitleIn").value = ""; $("dBodyIn").value = ""; supersedeId = null;
   toast("Decision recorded; all agents notified"); await refresh(); render(true);
 }
 async function retract(id) { if (!confirm(`Retract decision #${id}? Agents will be told.`)) return; await api("/api/decision/retract", { id }); await refresh(); render(true); }
@@ -566,7 +606,7 @@ async function releaseClaim(id) { await api("/api/claim/release", { id }); await
 async function sendCompose() {
   const body = $("cBody").value.trim(); if (!body) return;
   const r = await api("/api/send", { to: $("cTo").value, body, wake: $("cWake").checked });
-  toast(r.wake ? r.wake.note : "Sent"); $("cBody").value = ""; await refresh(); render(true);
+  toast(r.wake ? r.wake.note : "Sent"); $("cBody").value = ""; $("cWake").checked = false; $("cTo").value = "*"; await refresh(); render(true);
 }
 function composeTo(name) { setTab("overview"); setTimeout(() => { $("cTo").value = name; $("cBody").focus(); }, 0); }
 async function wakeAgent(name) {
@@ -644,8 +684,9 @@ function renderInbox() {
 function toggleReply(id) { openReplies.has(id) ? openReplies.delete(id) : openReplies.set(id, ""); renderInbox(); document.querySelector(`.reply textarea[data-id="${id}"]`)?.focus(); }
 async function replyTo(to, id, btn) {
   const ta = btn.previousElementSibling; const body = ta.value.trim(); if (!body) return;
+  await api("/api/send", { to, body, kind: "answer", reply_to: id }); // on failure the box and its draft stay
   openReplies.delete(id);
-  await api("/api/send", { to, body, kind: "answer", reply_to: id }); await api("/api/read", { ids: [id] });
+  await api("/api/read", { ids: [id] });
   toast(`Replied to ${to}`); await refresh(); renderInbox();
 }
 $("readAllBtn").onclick = async () => { await api("/api/read", {}); await refresh(); renderInbox(); };
@@ -732,13 +773,20 @@ function readGuardrails() {
 // ---------- lead ----------
 function leadWhere(l) { const bits = [l.app || l.runtime, l.title ? `“${l.title}”` : "", l.cwd ? home(l.cwd) : ""].filter(Boolean); return bits.length ? ` (${esc(bits.join(" · "))})` : ""; }
 async function leadDo(what, id, extra = {}) {
-  await api(`/api/lead/${what}`, { id, ...extra });
-  toast(what === "approve" ? "GANG GANG — your lead is in" : what === "revoke" ? "Lead removed" : "Saved");
+  try {
+    await api(`/api/lead/${what === "reject" ? "revoke" : what}`, { id, ...extra });
+    toast({ approve: "GANG GANG — your lead is in", revoke: "Lead removed", reject: "Request rejected" }[what] ?? "Saved");
+  } catch (e) {
+    if (!e?.shown) toast("Couldn't reach the hub; nothing changed");
+  }
+  // re-sync from the server either way, so the banner and the dialog's checkbox show what's really saved
   await refresh(); render(true); if ($("dlg").open && $("dTitle").textContent.startsWith("Your lead")) openLead();
 }
 async function openLead() {
   const lead = S.leads.find((l) => l.status === "approved");
-  const p = (await (await fetch(`/api/lead-prompt?name=lead`)).json()).prompt;
+  let p;
+  try { p = (await (await fetch(`/api/lead-prompt?name=lead`)).json()).prompt; }
+  catch { return toast("Couldn't reach the hub. Is it running? (gang start)"); }
   const setup = `<div><label class="field">Paste this into the chat you want as your lead <span class="faint">(Claude or Codex, new or existing, any folder)</span></label>
       <div class="prompt" id="lPrompt">${esc(p)}</div>
       <div class="row" style="margin-top:8px"><button class="primary" id="lCopy">Copy prompt</button><span class="small muted" id="lCopied"></span></div></div>

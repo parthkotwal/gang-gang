@@ -355,3 +355,53 @@ test("lead: unapproved or non-lead callers are refused by the server rpc", async
   assert.ok(hub.rpc("lead", { action: "brief" }, { session_id: "L1" }).needs_user);
   assert.match(hub.rpc("lead", { action: "help" }, {}), /gang lead tool/);
 });
+
+test("lead: only pending requests can be approved; approving replaces the current lead", () => {
+  const { core, l } = leadSetup();
+  core.approveLead(l.id);
+  assert.throws(() => core.approveLead(l.id), /already your lead/);
+  const l2 = core.registerLead({ name: "lead", runtime: "codex", cwd: "/", session_id: "s-lead2" });
+  core.revokeLead(l2.id);
+  assert.throws(() => core.approveLead(l2.id), /rejected or revoked/);
+  assert.equal(core.activeLead()!.id, l.id, "a stale approve can't bring a rejected request back");
+});
+
+test("lead: a team agent's session can't become a lead, and keeps working as an agent", async () => {
+  const { createHub } = await import("../src/server.ts");
+  const hub = createHub({ dbPath: join(process.env.GANG_HOME!, `rpc${Math.random()}.db`), notify: () => {}, metaReader: noMeta });
+  hub.rpc("register", { name: "impl", role: "impl" }, { runtime: "codex", cwd: "/repo", session_id: "A1" });
+  assert.throws(() => hub.rpc("lead", { action: "register" }, { runtime: "codex", cwd: "/repo", session_id: "A1" }), /team agent/);
+  assert.throws(() => hub.rpc("lead", { action: "register" }, { runtime: "claude", cwd: "/repo", name: "impl", team: "x" }), /team agent/);
+  // even if a lead row gets bound to an agent's session, agent behavior wins
+  const { core, T } = setup();
+  core.registerLead({ name: "lead", runtime: "claude", cwd: "/", session_id: "s-impl" });
+  assert.equal(core.leadSession("s-impl"), undefined);
+  core.send(T, "planner", "impl", "please look at the loader");
+  assert.match(core.hookEvent("claude", "PostToolUse", { session_id: "s-impl", tool_name: "Read" }).context!, /unread team message/);
+});
+
+test("lead: a one-team brief doesn't mark other news as seen; unknown team is an error", () => {
+  const { core, T, l, run } = leadSetup();
+  core.approveLead(l.id);
+  core.send(T, "impl", "*", "loader leak inflates acc", "finding");
+  assert.throws(() => run("brief", { team: "nope" }), /no team "nope"/);
+  assert.match(run("brief", { team: T }).teams[0].new_since_last_brief.findings[0], /leak/);
+  assert.match(run("brief").teams[0].new_since_last_brief.findings[0], /leak/, "still new for the full brief");
+  assert.equal(run("brief").teams[0].new_since_last_brief, undefined);
+});
+
+test("lead: thread shows bodies verbatim (no $ replacement patterns)", () => {
+  const { core, T, l, run } = leadSetup();
+  core.approveLead(l.id);
+  const m = core.send(T, "impl", "human", "cost is $& more, see $' and $1");
+  assert.match(run("thread", { id: m.id })[0], /cost is \$& more, see \$' and \$1/);
+});
+
+test("lead: heads-up ignores the lead's own actions", () => {
+  const { core, l, run } = leadSetup();
+  core.approveLead(l.id);
+  run("brief");
+  run("send", { to: "impl", body: "go ahead" });
+  run("task_add", { title: "rerun with 8192", owner: "impl" });
+  assert.equal(core.hookEvent("claude", "UserPromptSubmit", { session_id: "s-lead", prompt: "hi" }).context ?? null, null);
+});
