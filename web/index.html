@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GANG GANG</title>
+<style>
+  :root {
+    --bg: #f5f4f0; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a64; --faint: #9a9993; --line: #e4e2dc; --hover: #f0efea;
+    --working: #1f8a4c; --oncall: #2563eb; --asleep: #8a8a85; --perm: #b45309; --bad: #c0392b;
+    --wake: #7c3aed; --chip: #efeee9; --accent: #1d1d1b; --accent-ink: #fff;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace; --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #131312; --panel: #1c1c1a; --ink: #ecebe6; --muted: #a09f99; --faint: #74736e; --line: #2e2d2a; --hover: #252522;
+      --working: #3fbf75; --oncall: #6b9bff; --asleep: #8a8a85; --perm: #f0a440; --bad: #ff6b5b; --wake: #a78bfa; --chip: #292826;
+      --accent: #ecebe6; --accent-ink: #131312; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif; background: var(--bg); color: var(--ink); }
+  a { color: inherit; }
+  select, input, textarea, button { font: inherit; color: inherit; }
+  select, input, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; }
+  textarea { resize: vertical; }
+  button { background: var(--chip); border: 1px solid var(--line); border-radius: 7px; padding: 5px 11px; cursor: pointer; white-space: nowrap; }
+  button:hover { border-color: var(--faint); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+  button.ghost:hover { background: var(--hover); color: var(--ink); }
+  button.danger { color: var(--bad); }
+  button.small { padding: 2px 8px; font-size: 12px; }
+  code { font-family: var(--mono); font-size: 12px; background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+  pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; margin: 0; }
+  .muted { color: var(--muted); } .faint { color: var(--faint); } .small { font-size: 12px; } .grow { flex: 1; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .stack > * + * { margin-top: 10px; }
+
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 10px 20px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 10; }
+  header .logo { font-weight: 900; font-size: 17px; letter-spacing: .02em; font-style: italic; }
+  #teamSel { font-weight: 600; max-width: 260px; }
+  .folders { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }
+  .inboxBtn { position: relative; }
+  .inboxBtn .count { position: absolute; top: -6px; right: -6px; background: var(--wake); color: #fff; border-radius: 999px; font-size: 11px; padding: 0 6px; font-weight: 700; }
+  .hubdot { width: 8px; height: 8px; border-radius: 50%; background: var(--working); display: inline-block; }
+  .hubdot.off { background: var(--bad); }
+
+  nav.tabs { display: flex; gap: 2px; padding: 0 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  nav.tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 10px 14px; color: var(--muted); font-weight: 550; }
+  nav.tabs button.on { color: var(--ink); border-bottom-color: var(--ink); }
+  nav.tabs .n { font-size: 11px; background: var(--chip); border-radius: 999px; padding: 0 6px; margin-left: 4px; color: var(--muted); }
+
+  main { padding: 18px 20px 40px; max-width: 1500px; margin: 0 auto; }
+  .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 18px; align-items: start; }
+  @media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } }
+  section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+  section.panel + section.panel { margin-top: 18px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 12px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+  h2 .grow { flex: 1; }
+  .empty { color: var(--muted); padding: 10px 0; }
+
+  /* agents */
+  .agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .card { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; border-top: 3px solid var(--asleep); background: var(--panel); }
+  .card.working { border-top-color: var(--working); } .card.on_call { border-top-color: var(--oncall); } .card.waiting_permission { border-top-color: var(--perm); }
+  .card .head { display: flex; gap: 10px; align-items: flex-start; }
+  .card .who { flex: 1; min-width: 0; }
+  .card .name { font-weight: 700; font-size: 15px; }
+  .card .title { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tags { display: flex; gap: 5px; flex-wrap: wrap; margin: 8px 0 4px; }
+  .tag { font-size: 11.5px; background: var(--chip); border-radius: 5px; padding: 1px 7px; color: var(--muted); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .tag b { color: var(--ink); font-weight: 600; }
+  .status { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 650; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
+  .s-working { color: var(--working); } .s-on_call { color: var(--oncall); } .s-asleep, .s-offline { color: var(--asleep); } .s-waiting_permission { color: var(--perm); }
+  .s-working .dot { animation: pulse 1.4s infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .focus { margin: 6px 0; font-size: 13px; }
+  .facts { font-size: 12px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+  .facts .hot { color: var(--wake); font-weight: 650; }
+  .card .actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 13px; flex: none; }
+  .avatar.sm { width: 24px; height: 24px; font-size: 11px; }
+
+  /* activity feed */
+  .feed { max-height: calc(100vh - 230px); overflow: auto; margin: 0 -6px; padding: 0 6px; }
+  .ev { display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+  .ev:last-child { border-bottom: 0; }
+  .ev .main { flex: 1; min-width: 0; }
+  .ev .line { font-size: 13px; }
+  .ev .line b { font-weight: 650; }
+  .ev .when { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
+  .ev .body { margin-top: 4px; font-size: 13px; background: var(--hover); border-radius: 8px; padding: 7px 10px; word-break: break-word; }
+  .ev .body.clamp { max-height: 8.5em; overflow: hidden; position: relative; }
+  .ev .more { font-size: 12px; color: var(--muted); cursor: pointer; margin-top: 3px; display: inline-block; }
+  .ev.k-wake .body { border-left: 3px solid var(--wake); }
+  .ev.k-finding .body { border-left: 3px solid var(--working); }
+  .ev.k-decision .body { border-left: 3px solid var(--oncall); }
+  .ev.k-question .body { border-left: 3px solid var(--perm); }
+  .ev .icon { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--chip); flex: none; font-size: 14px; }
+  .pill { font-size: 11px; border-radius: 999px; padding: 0 7px; background: var(--chip); color: var(--muted); font-weight: 600; }
+  .pill.wake { background: var(--wake); color: #fff; } .pill.q { background: var(--perm); color: #fff; } .pill.find { background: var(--working); color: #fff; }
+  .chips { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 8px; }
+  .chip { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; cursor: pointer; user-select: none; color: var(--muted); }
+  .chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .md p { margin: 0 0 6px; } .md p:last-child { margin: 0; } .md ul { margin: 2px 0 6px; padding-left: 18px; }
+
+  /* tasks */
+  .board { display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr)); gap: 12px; }
+  @media (max-width: 1000px) { .board { grid-template-columns: repeat(2, 1fr); } }
+  .col { background: var(--hover); border-radius: var(--radius); padding: 10px; min-height: 120px; }
+  .col h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  .task { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; margin-bottom: 8px; }
+  .task .t { font-weight: 600; font-size: 13.5px; }
+  .task .meta { font-size: 12px; color: var(--muted); margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .task .blocked { color: var(--perm); font-weight: 600; }
+  .task select { font-size: 12px; padding: 2px 4px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11px; color: var(--muted); font-weight: 650; text-transform: uppercase; letter-spacing: .05em; }
+  .st-running { color: var(--oncall); } .st-succeeded { color: var(--working); } .st-failed { color: var(--bad); } .st-killed { color: var(--asleep); }
+  .bar { height: 4px; background: var(--chip); border-radius: 2px; overflow: hidden; margin-top: 4px; width: 120px; }
+  .bar > div { height: 100%; background: var(--oncall); }
+
+  /* overlays */
+  dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--ink); padding: 0; width: min(760px, 94vw); max-height: 88vh; }
+  dialog.wide { width: min(1000px, 96vw); }
+  dialog::backdrop { background: rgba(0,0,0,.4); }
+  dialog .dh { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }
+  dialog .dh strong { font-size: 15px; }
+  dialog .db { padding: 16px 18px; overflow: auto; max-height: calc(88vh - 60px); }
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 96vw); background: var(--panel); border-left: 1px solid var(--line); z-index: 30; transform: translateX(105%); transition: transform .18s; display: flex; flex-direction: column; box-shadow: -10px 0 30px rgba(0,0,0,.12); }
+  .drawer.open { transform: none; }
+  .drawer .dh { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .drawer .db { flex: 1; overflow: auto; padding: 8px 16px; }
+  .msg { padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .msg.unread { background: linear-gradient(90deg, color-mix(in srgb, var(--wake) 10%, transparent), transparent); margin: 0 -16px; padding: 10px 16px; }
+  .msg .reply { margin-top: 6px; display: none; gap: 6px; }
+  .msg .reply.open { display: flex; }
+  .msg .reply textarea { flex: 1; min-height: 36px; }
+  label.field { display: block; font-size: 12px; font-weight: 650; color: var(--muted); margin-bottom: 4px; }
+  .roles { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+  .role { border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; cursor: pointer; font-size: 12.5px; }
+  .role b { display: block; font-size: 13.5px; margin-bottom: 2px; }
+  .role.on { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: none; }
+  .seg button.on { background: var(--accent); color: var(--accent-ink); }
+  .prompt { background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 12px; max-height: 260px; overflow: auto; font-size: 12.5px; white-space: pre-wrap; }
+  .steps { margin: 0; padding-left: 18px; } .steps li { margin: 4px 0; }
+  .folderlist .f { display: flex; gap: 8px; align-items: center; padding: 6px 8px; background: var(--hover); border-radius: 7px; margin-bottom: 6px; font-size: 13px; font-family: var(--mono); }
+  .folderlist .f span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--accent); color: var(--accent-ink); padding: 9px 16px; border-radius: 9px; font-size: 13px; z-index: 50; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 80vw; }
+  .toast.show { opacity: 1; }
+  .tl .turn { margin: 10px 0; }
+  .tl .bubble { border-radius: 10px; padding: 8px 11px; font-size: 13px; max-width: 92%; word-break: break-word; }
+  .tl .user .bubble { background: color-mix(in srgb, var(--oncall) 13%, var(--panel)); margin-left: auto; }
+  .tl .user { display: flex; flex-direction: column; align-items: flex-end; }
+  .tl .assistant .bubble { background: var(--hover); }
+  .tl .wake .bubble { background: color-mix(in srgb, var(--wake) 14%, var(--panel)); border-left: 3px solid var(--wake); }
+  .tl .tools { font-family: var(--mono); font-size: 11.5px; color: var(--muted); padding: 2px 4px; }
+  .tl .tools div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tl .ts { font-size: 11px; color: var(--faint); margin: 2px 4px; }
+  .onboard { max-width: 760px; margin: 30px auto; }
+  .approval { margin: 8px 0 2px; border: 1px solid color-mix(in srgb, var(--perm) 45%, transparent); background: color-mix(in srgb, var(--perm) 10%, var(--panel)); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; }
+  .approval b { color: var(--perm); }
+  .holdbar { background: color-mix(in srgb, var(--perm) 16%, var(--panel)); border-bottom: 1px solid var(--line); padding: 8px 20px; font-size: 13px; display: flex; gap: 10px; align-items: center; }
+  .needs { background: var(--perm); color: #fff; border-color: var(--perm); font-weight: 650; }
+  .gr { display: grid; grid-template-columns: 1fr 110px; gap: 6px 12px; align-items: center; font-size: 13px; }
+  .gr input { width: 100%; }
+  .gr .h { grid-column: 1 / -1; font-size: 12px; color: var(--muted); margin-top: -4px; }
+  .ev.k-guardrail .body, .ev.k-approval .body { border-left: 3px solid var(--perm); }
+  .onboard ol { padding-left: 20px; } .onboard li { margin: 10px 0; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo" title="GANG GANG!">GANG GANG</span>
+  <select id="teamSel" title="Switch team"></select>
+  <button class="ghost small" id="teamSettingsBtn" title="Team name & folders">Team settings</button>
+  <span class="folders" id="teamFolders"></span>
+  <span class="grow"></span>
+  <button id="newTeamBtn">＋ New team</button>
+  <button class="primary" id="addAgentBtn">＋ Add agent</button>
+  <button class="needs" id="needsBtn" hidden title="Agents waiting for your approval"></button>
+  <button id="pauseBtn" title="Pause: agents finish their current turn and nobody wakes anybody until you resume">Pause team</button>
+  <button class="inboxBtn" id="inboxBtn">Inbox <span class="count" id="inboxCount" hidden></span></button>
+  <span class="small muted row" style="gap:5px" id="hubState"><span class="hubdot"></span>hub</span>
+</header>
+<nav class="tabs" id="tabs">
+  <button data-tab="overview" class="on">Overview</button>
+  <button data-tab="tasks">Tasks<span class="n" id="nTasks"></span></button>
+  <button data-tab="decisions">Decisions<span class="n" id="nDecisions"></span></button>
+  <button data-tab="jobs">Jobs<span class="n" id="nJobs"></span></button>
+  <button data-tab="files">File claims<span class="n" id="nClaims"></span></button>
+</nav>
+<div class="holdbar" id="holdbar" hidden></div>
+<main id="main"></main>
+
+<!-- inbox drawer -->
+<aside class="drawer" id="inbox">
+  <div class="dh"><strong>Your inbox</strong><span class="grow"></span>
+    <button class="small" id="notifBtn" title="Desktop notifications for messages to you">🔔 Notify me</button>
+    <button class="small" id="readAllBtn">Mark all read</button>
+    <button class="ghost" onclick="toggleInbox(false)">✕</button></div>
+  <div class="db" id="inboxBody"></div>
+</aside>
+
+<dialog id="dlg"><div class="dh"><strong id="dTitle"></strong><span class="grow"></span><span id="dActions" class="row"></span><button class="ghost" onclick="dlg.close()">✕</button></div><div class="db" id="dBody"></div></dialog>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const params = new URLSearchParams(location.search);
+let team = params.get("team") || "";
+let tab = params.get("tab") || "overview";
+let S = null, lastHumanIds = null, notifyOn = localStorage.gangNotify === "1";
+const feedFilter = { kinds: new Set(), agent: "" };
+
+// ---------- helpers ----------
+const ago = (t) => { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 45 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : new Date(t).toLocaleDateString(); };
+const clock = (t) => new Date(t).toLocaleString([], { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" });
+const dur = (a, b) => { const s = Math.round(((b ?? Date.now()) - a) / 1000); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`; };
+const home = (p) => String(p ?? "").replace(/^\/Users\/[^/]+/, "~");
+const base = (p) => String(p ?? "").split("/").filter(Boolean).pop() ?? p;
+function color(name) { let h = 0; for (const c of String(name)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return name === "human" ? "#555" : name === "gang" ? "#8a8a85" : `hsl(${h % 360} 52% 45%)`; }
+function avatar(name, sm) { const label = name === "human" ? "You" : name === "gang" ? "⚙" : String(name).replace(/[^a-z0-9]/gi, "").slice(0, 2).toUpperCase(); return `<span class="avatar ${sm ? "sm" : ""}" style="background:${color(name)}" title="${esc(name)}">${esc(label === "You" ? "Y" : label)}</span>`; }
+const who = (n, obj) => n === "human" ? (obj ? "you" : "You") : n === "gang" ? "gang" : n === "*" ? "everyone" : n;
+function md(s) {
+  let t = esc(s);
+  t = t.replace(/```([\s\S]*?)```/g, (_, c) => `<pre>${c.replace(/^\w*\n/, "")}</pre>`);
+  t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+  const lines = t.split("\n"); let out = "", inList = false;
+  for (const l of lines) {
+    const m = l.match(/^\s*[-*•]\s+(.*)/);
+    if (m) { if (!inList) { out += "<ul>"; inList = true; } out += `<li>${m[1]}</li>`; continue; }
+    if (inList) { out += "</ul>"; inList = false; }
+    out += l.trim() ? `<p>${l}</p>` : "";
+  }
+  if (inList) out += "</ul>";
+  return `<div class="md">${out}</div>`;
+}
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2600); }
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand("copy"); } catch {} ta.remove(); return ok;
+}
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ team, ...body }) } : {});
+  const j = await r.json();
+  if (j && j.error) { toast(j.error); throw new Error(j.error); }
+  return j;
+}
+const agentByName = (n) => S?.agents.find((a) => a.name === n);
+const STATUS = {
+  working: (a) => ["Working", "s-working", "Running a turn right now."],
+  on_call: (a) => a.runtime === "codex" ? ["On call", "s-on_call", "Finished its turn and is waiting for teammates. Codex shows this thread as busy (“gang: on call”); a teammate's wake resumes it instantly."] : ["Idle · wakeable", "s-on_call", "Finished its turn. A teammate's wake resumes it instantly."],
+  asleep: () => ["Asleep", "s-asleep", "Not listening for wakes. Messages wait in its inbox; open its thread and type anything to resume it."],
+  waiting_permission: () => ["Needs your approval", "s-waiting_permission", "Waiting on a permission prompt in its app."],
+  offline: () => ["Offline", "s-offline", ""],
+};
+function appLabel(a) { return a.app || (a.runtime === "codex" ? "Codex" : a.runtime === "claude" ? "Claude Code" : a.runtime); }
+function setTab(t) { tab = t; document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === t)); syncUrl(); render(true); }
+function syncUrl() { const p = new URLSearchParams(); if (team) p.set("team", team); if (tab !== "overview") p.set("tab", tab); history.replaceState(null, "", `?${p}`); }
+document.querySelectorAll("#tabs button").forEach((b) => b.onclick = () => setTab(b.dataset.tab));
+
+// ---------- data ----------
+async function refresh() {
+  try {
+    S = await (await fetch(`/api/state?team=${encodeURIComponent(team)}`)).json();
+    $("hubState").innerHTML = `<span class="hubdot"></span>hub`;
+  } catch { $("hubState").innerHTML = `<span class="hubdot off"></span>hub offline`; return; }
+  if (S.team && team !== S.team) { team = S.team; syncUrl(); }
+  notifyNew();
+  render(false);
+}
+
+function notifyNew() {
+  const ids = S.human.messages.filter((m) => !m.read_at).map((m) => m.id);
+  if (lastHumanIds && notifyOn && "Notification" in window && Notification.permission === "granted") {
+    for (const m of S.human.messages) if (!m.read_at && !lastHumanIds.includes(m.id)) new Notification(`gang · ${who(m.from_agent)}`, { body: m.body.slice(0, 200) });
+  }
+  lastHumanIds = ids;
+}
+
+// ---------- render ----------
+function render(force) {
+  if (!S) return;
+  // header
+  const sel = $("teamSel");
+  const opts = S.teams.map((t) => `<option value="${esc(t.id)}">${esc(t.name)} (${t.agents})</option>`).join("") + `<option value="__new">＋ New team…</option>`;
+  if (sel.dataset.v !== opts) { sel.innerHTML = opts; sel.dataset.v = opts; }
+  sel.value = S.team || "__new";
+  const t = S.teams.find((x) => x.id === S.team);
+  $("teamFolders").textContent = t ? t.folderList.map(home).join("  ·  ") : "";
+  $("teamFolders").title = t ? t.folderList.join("\n") : "";
+  $("inboxCount").hidden = !S.human.unread; $("inboxCount").textContent = S.human.unread;
+  $("teamSettingsBtn").hidden = !t; $("addAgentBtn").hidden = !t; $("pauseBtn").hidden = !t;
+  const paused = !!S.settings?.paused;
+  $("pauseBtn").textContent = paused ? "▶ Resume team" : "⏸ Pause team";
+  $("holdbar").hidden = !S.hold;
+  if (S.hold) $("holdbar").innerHTML = `<b>On hold:</b> ${esc(S.hold)}. Agents finish their current turn, but nobody goes on call and teammate wakes become plain messages. Your own messages and wakes still work.${paused ? ` <button class="small" onclick="setPaused(false)">Resume</button>` : ` <button class="small" onclick="openTeamSettings()">Change quiet hours</button>`}`;
+  const waiting = S.agents.filter((a) => a.approval);
+  $("needsBtn").hidden = !waiting.length;
+  $("needsBtn").textContent = `${waiting.length} waiting for approval`;
+  const open = S.tasks.filter((x) => !["done", "cancelled"].includes(x.status)).length;
+  $("nTasks").textContent = open || ""; $("nDecisions").textContent = S.decisions.filter((d) => d.status === "active").length || "";
+  $("nJobs").textContent = S.jobs.filter((j) => j.status === "running").length || ""; $("nClaims").textContent = S.claims.length || "";
+  if ($("inbox").classList.contains("open") && !$("inbox").contains(document.activeElement)) renderInbox();
+
+  // don't clobber something the user is typing/selecting in
+  const main = $("main");
+  if (!force && main.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
+  if (!S.teams.length) { main.innerHTML = onboardingHtml(); return; }
+  main.innerHTML = { overview: overviewHtml, tasks: tasksHtml, decisions: decisionsHtml, jobs: jobsHtml, files: filesHtml }[tab]();
+  if (tab === "overview") bindFeed();
+}
+
+function onboardingHtml() {
+  return `<div class="onboard panel" style="background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 30px">
+    <h1 style="margin:0 0 6px;font-size:22px">Assemble the gang 🤙</h1>
+    <p class="muted" style="margin:0 0 14px">A <b>team</b> is a group of agents working on one project. It can span several folders, like your Codex and Claude projects do.</p>
+    <ol>
+      <li><b>Create a team</b> and choose its folders (or import a Codex project). <button class="primary small" onclick="openNewTeam()">＋ New team</button></li>
+      <li><b>Add agents</b>: start a session in Codex or Claude desktop (or pick one that's already open), paste the join prompt. Existing sessions keep their history.</li>
+      <li><b>Watch & steer</b> from here: who is working, what they said to each other, tasks, decisions, jobs. Your inbox collects anything addressed to you.</li>
+    </ol></div>`;
+}
+
+function agentCard(a) {
+  const [label, cls, tip] = (STATUS[a.status] || STATUS.offline)(a);
+  const tasks = S.tasks.filter((x) => x.owner === a.name && !["done", "cancelled"].includes(x.status));
+  const claims = S.claims.filter((c) => c.agent === a.name);
+  const jobs = S.jobs.filter((j) => j.owner === a.name && j.status === "running");
+  const folders = (a.folders || []).map(base).join(", ");
+  return `<div class="card ${a.status}">
+    <div class="head">${avatar(a.name)}<div class="who">
+      <div class="row" style="gap:6px"><span class="name">${esc(a.name)}</span><span class="muted small">${esc(a.role)}</span></div>
+      <div class="title" title="Session name in ${esc(appLabel(a))}">${a.title ? `“${esc(a.title)}”` : `<span class="faint">untitled session</span>`}</div></div>
+      <span class="status ${cls}" title="${esc(tip)}"><span class="dot"></span>${label}</span></div>
+    <div class="tags">
+      <span class="tag" title="App"><b>${esc(appLabel(a))}</b></span>
+      ${a.model ? `<span class="tag" title="Model / effort">${esc(a.model)}${a.effort ? ` · ${esc(a.effort)}` : ""}</span>` : ""}
+      ${a.branch ? `<span class="tag" title="Git branch">⎇ ${esc(a.branch)}</span>` : ""}
+      ${folders ? `<span class="tag" title="${esc((a.folders || []).join("\n"))}">📁 ${esc(folders)}</span>` : ""}
+    </div>
+    ${a.approval ? `<div class="approval"><b>Waiting for your approval</b> · ${ago(a.approval.at)}<br>${esc(a.approval.detail)}<div class="faint">Approve or deny it in ${esc(appLabel(a))}${a.title ? ` → “${esc(a.title)}”` : ""}.</div></div>` : ""}
+    <div class="focus">${a.status_text ? esc(a.status_text) : `<span class="faint">No status posted yet</span>`}</div>
+    <div class="facts">
+      ${a.unread ? `<span class="hot">${a.unread} unread</span>` : ""}
+      ${tasks.length ? `<span>${tasks.length} task${tasks.length > 1 ? "s" : ""}</span>` : ""}
+      ${claims.length ? `<span title="${esc(claims.map((c) => c.pattern).join("\n"))}">${claims.length} file claim${claims.length > 1 ? "s" : ""}</span>` : ""}
+      ${jobs.length ? `<span>${jobs.length} job running</span>` : ""}
+      <span>active ${ago(a.last_seen)}</span>
+      ${S.settings && a.auto_turns ? `<span title="Times it was woken by teammates/jobs since you last talked to it (limit ${S.settings.autonomy_budget})" style="${a.auto_turns >= S.settings.autonomy_budget ? "color:var(--perm);font-weight:650" : ""}">${a.auto_turns}/${S.settings.autonomy_budget} autonomous turns</span>` : ""}
+      ${a.session_id ? "" : `<span style="color:var(--perm)" title="It registered but no hook event has arrived from its session yet">session not linked yet</span>`}
+    </div>
+    <div class="actions">
+      <button class="small" onclick="showTimeline('${esc(a.name)}')">Conversation</button>
+      <button class="small" onclick="composeTo('${esc(a.name)}')">Message</button>
+      <button class="small" onclick="wakeAgent('${esc(a.name)}')">Wake</button>
+      <span class="grow"></span>
+      <button class="small ghost" onclick="removeAgent('${esc(a.name)}')" title="Remove from team (the session keeps running)">Remove</button>
+    </div></div>`;
+}
+
+function overviewHtml() {
+  const agents = S.agents.length ? `<div class="agents">${S.agents.map(agentCard).join("")}</div>`
+    : `<div class="empty">No one's in the gang yet. <button class="primary small" onclick="openAddAgent()">＋ Add agent</button></div>`;
+  const kinds = [["message", "Messages"], ["wake", "Wakes"], ["finding", "Findings"], ["task", "Tasks"], ["decision", "Decisions"], ["job", "Jobs"], ["claim", "Files"], ["approval", "Approvals"], ["guardrail", "Guardrails"], ["status", "Status"]];
+  return `<div class="grid2"><div>
+      <section class="panel"><h2>Agents <span class="grow"></span></h2>${agents}</section>
+      <section class="panel"><h2>Message the team</h2>
+        <div class="row" style="align-items:flex-start">
+          <select id="cTo">${["*", ...S.agents.map((a) => a.name)].map((n) => `<option value="${esc(n)}">${n === "*" ? "Everyone" : esc(n)}</option>`).join("")}</select>
+          <textarea id="cBody" class="grow" rows="2" placeholder="Write as you… (⌘↩ to send)"></textarea>
+        </div>
+        <div class="row" style="margin-top:8px"><label class="small row" style="gap:5px"><input type="checkbox" id="cWake"> Also wake them so they act now</label><span class="grow"></span><button class="primary" onclick="sendCompose()">Send</button></div>
+      </section></div>
+    <section class="panel"><h2>Activity</h2>
+      <div class="chips">${kinds.map(([k, l]) => `<span class="chip ${feedFilter.kinds.has(k) ? "on" : ""}" data-k="${k}">${l}</span>`).join("")}
+        <select id="fAgent" style="font-size:12px;padding:1px 6px"><option value="">All agents</option>${["human", ...S.agents.map((a) => a.name)].map((n) => `<option ${feedFilter.agent === n ? "selected" : ""} value="${esc(n)}">${esc(who(n))}</option>`).join("")}</select></div>
+      <div class="feed" id="feed">${feedHtml()}</div></section></div>`;
+}
+
+function bindFeed() {
+  document.querySelectorAll(".chip[data-k]").forEach((c) => c.onclick = () => { const k = c.dataset.k; feedFilter.kinds.has(k) ? feedFilter.kinds.delete(k) : feedFilter.kinds.add(k); render(true); });
+  $("fAgent").onchange = (e) => { feedFilter.agent = e.target.value; render(true); };
+  $("cBody").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendCompose(); });
+  document.querySelectorAll(".ev .body.clamp").forEach((b) => { if (b.scrollHeight <= b.clientHeight + 4) { b.classList.remove("clamp"); b.nextElementSibling?.remove(); } });
+}
+
+function describe(e) {
+  const msg = e.ref ? S.messages.find((m) => m.id === e.ref) : null;
+  const A = `<b>${esc(who(e.actor))}</b>`, B = `<b>${esc(who(e.target, true))}</b>`;
+  switch (e.kind) {
+    case "message": {
+      const k = msg?.kind;
+      const reply = msg?.thread_id ? ` <span class="faint">↩ re #${msg.thread_id}</span>` : "";
+      if (k === "question") return { k: "question", line: `${A} asked ${B} <span class="pill q">question</span>${reply}`, body: e.text };
+      if (k === "answer") return { k: "message", line: `${A} answered ${B}${reply}`, body: e.text };
+      if (k === "handoff") return { k: "message", line: `${A} handed off to ${B}`, body: e.text };
+      if (k === "job") return { k: "job", icon: "⚙", line: `Job update for ${B}`, body: e.text };
+      return { k: "message", line: `${A} → ${B}${reply}`, body: e.text };
+    }
+    case "wake": {
+      let method = "", reason = e.text;
+      if (e.text.includes("::")) { const i = e.text.indexOf("::"); method = e.text.slice(0, i); reason = e.text.slice(i + 2); }
+      else { const m = e.text.match(/^\[(\w+)\]\s*([\s\S]*)/); if (m) { method = m[1]; reason = m[2]; } }
+      const how = { on_call: "resumed it instantly", pending: "it'll see this when its turn ends", notified: "it was asleep — you were notified", read: "" }[method] ?? "";
+      return { k: "wake", line: `${A} <span class="pill wake">woke</span> ${B} <span class="faint">${how}</span>`, body: reason };
+    }
+    case "wake_limited": return { k: "guardrail", icon: "🛡", line: `${A}'s wake of ${B} was held`, sub: e.text };
+    case "guardrail": return { k: "guardrail", icon: "🛡", line: e.actor === "gang" ? `<b>Guardrail</b>` : `${A} ${esc(e.text)}`, body: e.actor === "gang" ? e.text : null };
+    case "approval": return { k: "approval", icon: "✋", line: `${A} ${esc(e.text)}` };
+    case "finding": return { k: "finding", line: `${A} shared a finding <span class="pill find">finding</span>`, body: e.text };
+    case "decision": return { k: "decision", icon: "⚖", line: `${A} recorded a decision`, body: e.text };
+    case "task": return { k: "task", icon: "☑", line: `${A} ${esc(e.text)}` };
+    case "job": return { k: "job", icon: /failed/.test(e.text) ? "✗" : /succeeded/.test(e.text) ? "✓" : "⚙", line: `${A} ${esc(e.text)}` };
+    case "claim": return { k: "claim", icon: "🔒", line: `${A} ${esc(e.text)}` };
+    case "status": return { k: "status", line: `${A} <span class="faint">now:</span> ${esc(e.text)}` };
+    case "register": return { k: "status", line: `${A} ${esc(e.text)}` };
+    case "remove": case "team": return { k: "status", icon: "•", line: esc(e.text) };
+    default: return { k: e.kind, line: `${A} ${esc(e.text)}` };
+  }
+}
+
+function feedHtml() {
+  const map = { question: "message", wake_limited: "guardrail", register: "status", remove: "status", team: "status" };
+  const items = S.activity.filter((e) => {
+    const k = map[e.kind] ?? e.kind;
+    if (feedFilter.kinds.size && !feedFilter.kinds.has(k)) return false;
+    if (feedFilter.agent && e.actor !== feedFilter.agent && e.target !== feedFilter.agent) return false;
+    return true;
+  });
+  if (!items.length) return `<div class="empty">Quiet in here… for now.</div>`;
+  return items.slice(0, 200).map((e) => {
+    const d = describe(e);
+    const icon = d.icon ? `<span class="icon">${d.icon}</span>` : avatar(e.actor || "gang");
+    return `<div class="ev k-${d.k}">${icon}<div class="main">
+      <div class="row" style="gap:6px;flex-wrap:nowrap"><div class="line grow">${d.line}</div><span class="when" title="${clock(e.ts)}">${ago(e.ts)}</span></div>
+      ${d.sub ? `<div class="small muted">${esc(d.sub)}</div>` : ""}
+      ${d.body ? `<div class="body clamp">${md(d.body)}</div><span class="more" onclick="this.previousElementSibling.classList.remove('clamp');this.remove()">Show more</span>` : ""}
+    </div></div>`;
+  }).join("");
+}
+
+// ---------- tasks ----------
+function tasksHtml() {
+  const cols = [["open", "To do"], ["in_progress", "In progress"], ["review", "In review"], ["done", "Done"]];
+  const owners = ["", "human", ...S.agents.map((a) => a.name)];
+  const card = (t) => `<div class="task"><div class="t">#${t.id} ${esc(t.title)}</div>
+    ${t.body ? `<div class="small muted" style="margin-top:3px">${esc(t.body.slice(0, 220))}</div>` : ""}
+    <div class="meta">${t.owner ? `${avatar(t.owner, true)} ${esc(who(t.owner))}` : `<span class="faint">unassigned</span>`}
+      ${t.blocked_by.length ? `<span class="blocked">⛔ waits on #${t.blocked_by.join(", #")}</span>` : t.deps.length ? `<span class="faint">after #${t.deps.join(", #")}</span>` : ""}
+      <span class="faint">by ${esc(who(t.created_by))}</span></div>
+    ${JSON.parse(t.notes).slice(-1).map((n) => `<div class="small" style="margin-top:4px">💬 <b>${esc(who(n.by))}</b>: ${esc(n.text)}</div>`).join("")}
+    <div class="row" style="margin-top:6px">
+      <select onchange="taskUpdate(${t.id},{status:this.value})">${["open", "in_progress", "review", "done", "cancelled"].map((s) => `<option ${s === t.status ? "selected" : ""} value="${s}">${s.replace("_", " ")}</option>`).join("")}</select>
+      <select onchange="taskUpdate(${t.id},{owner:this.value||null})">${owners.map((o) => `<option ${o === (t.owner ?? "") ? "selected" : ""} value="${esc(o)}">${o ? esc(who(o)) : "unassigned"}</option>`).join("")}</select>
+    </div></div>`;
+  return `<section class="panel"><h2>New task</h2>
+      <div class="row"><input id="tTitle" class="grow" placeholder="What needs doing?"><select id="tOwner">${owners.map((o) => `<option value="${esc(o)}">${o ? esc(who(o)) : "unassigned"}</option>`).join("")}</select>
+      <select id="tDeps" multiple size="1" title="Depends on (⌘-click for several)" style="min-width:140px">${S.tasks.filter((t) => t.status !== "done").map((t) => `<option value="${t.id}">after #${t.id} ${esc(t.title.slice(0, 30))}</option>`).join("")}</select>
+      <button class="primary" onclick="addTask()">Add task</button></div>
+      <textarea id="tBody" rows="2" style="width:100%;margin-top:8px" placeholder="Details (optional)"></textarea></section>
+    <section class="panel"><div class="board">${cols.map(([k, l]) => {
+      const list = S.tasks.filter((t) => t.status === k);
+      return `<div class="col"><h3>${l} · ${list.length}</h3>${list.map(card).join("") || `<div class="faint small">—</div>`}</div>`;
+    }).join("")}</div>
+    ${S.tasks.some((t) => t.status === "cancelled") ? `<div class="small muted" style="margin-top:8px">${S.tasks.filter((t) => t.status === "cancelled").length} cancelled</div>` : ""}</section>`;
+}
+async function addTask() {
+  const title = $("tTitle").value.trim(); if (!title) return;
+  await api("/api/task/add", { title, body: $("tBody").value.trim() || undefined, owner: $("tOwner").value || null, depends_on: [...$("tDeps").selectedOptions].map((o) => Number(o.value)) });
+  toast("Task added"); await refresh(); render(true);
+}
+async function taskUpdate(id, p) { await api("/api/task/update", { id, ...p }); await refresh(); render(true); }
+
+// ---------- decisions ----------
+function decisionsHtml() {
+  const active = S.decisions.filter((d) => d.status === "active"), old = S.decisions.filter((d) => d.status !== "active");
+  const item = (d) => `<div class="ev k-decision">${avatar(d.decided_by)}<div class="main">
+      <div class="row"><div class="line grow"><b>#${d.id} ${esc(d.title)}</b> ${d.status !== "active" ? `<span class="pill">${d.status}</span>` : ""}</div><span class="when">${esc(who(d.decided_by))} · ${ago(d.created)}</span></div>
+      ${d.body ? `<div class="body">${md(d.body)}</div>` : ""}${d.supersedes ? `<div class="small faint">replaces #${d.supersedes}</div>` : ""}
+      ${d.status === "active" ? `<div class="row" style="margin-top:6px"><button class="small" onclick="supersede(${d.id})">Replace…</button><button class="small ghost danger" onclick="retract(${d.id})">Retract</button></div>` : ""}
+    </div></div>`;
+  return `<div class="grid2"><section class="panel"><h2>In effect · every agent sees these at session start</h2>
+      ${active.map(item).join("") || `<div class="empty">No decisions yet. Agents record them with <code>decide</code>; you can add one here.</div>`}
+      ${old.length ? `<h2 style="margin-top:18px">History</h2>${old.map(item).join("")}` : ""}</section>
+    <section class="panel"><h2>Record a decision</h2>
+      <input id="dTitleIn" style="width:100%" placeholder="e.g. Use seeds 1–3 for every run">
+      <textarea id="dBodyIn" rows="4" style="width:100%;margin-top:8px" placeholder="Why / details (optional)"></textarea>
+      <input type="hidden" id="dSup"><div class="row" style="margin-top:8px"><span class="small muted" id="dSupLbl"></span><span class="grow"></span><button class="primary" onclick="addDecision()">Record & notify team</button></div></section></div>`;
+}
+function supersede(id) { $("dSup").value = id; $("dSupLbl").textContent = `Replaces #${id}`; $("dTitleIn").focus(); }
+async function addDecision() {
+  const title = $("dTitleIn").value.trim(); if (!title) return;
+  await api("/api/decision/add", { title, body: $("dBodyIn").value.trim(), supersedes: Number($("dSup").value) || null });
+  toast("Decision recorded; all agents notified"); await refresh(); render(true);
+}
+async function retract(id) { if (!confirm(`Retract decision #${id}? Agents will be told.`)) return; await api("/api/decision/retract", { id }); await refresh(); render(true); }
+
+// ---------- jobs ----------
+function jobsHtml() {
+  if (!S.jobs.length) return `<section class="panel"><h2>Jobs</h2><div class="empty">No jobs yet. Agents start long-running commands with <code>job_start</code> and get woken when they finish; you can also run <code>gang run --as &lt;agent&gt; -- &lt;command&gt;</code>.</div></section>`;
+  const pct = (p) => { const m = String(p ?? "").match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+)/); if (m) return 100 * m[1] / m[2]; const q = String(p ?? "").match(/([\d.]+)%/); return q ? Number(q[1]) : null; };
+  return `<section class="panel"><h2>Jobs</h2><table><tr><th>Job</th><th>Owner</th><th>Status</th><th>Progress</th><th>Time</th><th></th></tr>
+    ${S.jobs.map((j) => { const p = pct(j.progress); return `<tr><td><b>#${j.id} ${esc(j.name)}</b><div class="small muted" style="font-family:var(--mono)">${esc(j.cmd.slice(0, 110))}</div><div class="small faint">${esc(home(j.cwd))}</div></td>
+      <td>${avatar(j.owner, true)} ${esc(who(j.owner))}</td>
+      <td class="st-${j.status}"><b>${j.status}</b>${j.exit_code != null ? ` <span class="faint">exit ${j.exit_code}</span>` : ""}</td>
+      <td>${esc(j.progress ?? "")}${p != null && j.status === "running" ? `<div class="bar"><div style="width:${Math.min(100, p)}%"></div></div>` : ""}</td>
+      <td title="started ${clock(j.started)}">${dur(j.started, j.ended)}</td>
+      <td class="row"><button class="small" onclick="showLog(${j.id})">Log</button>${j.status === "running" ? `<button class="small danger" onclick="killJob(${j.id})">Stop</button>` : ""}</td></tr>`; }).join("")}</table></section>`;
+}
+
+// ---------- files ----------
+function filesHtml() {
+  return `<section class="panel"><h2>File claims · teammates can't edit these until released</h2>
+    ${S.claims.length ? `<table><tr><th>Path</th><th>Held by</th><th>Why</th><th>Until</th><th></th></tr>${S.claims.map((c) => `<tr>
+      <td><code>${esc(home(c.pattern))}</code></td><td>${avatar(c.agent, true)} ${esc(c.agent)}</td><td>${esc(c.note ?? "")}</td>
+      <td>${new Date(c.expires).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</td>
+      <td><button class="small" onclick="releaseClaim(${c.id})">Release</button></td></tr>`).join("")}</table>`
+    : `<div class="empty">No active claims. Agents claim files with <code>claim</code> before editing shared code; edits by other agents to claimed files are blocked with a note to coordinate.</div>`}</section>`;
+}
+async function releaseClaim(id) { await api("/api/claim/release", { id }); await refresh(); render(true); }
+
+// ---------- actions ----------
+async function sendCompose() {
+  const body = $("cBody").value.trim(); if (!body) return;
+  const r = await api("/api/send", { to: $("cTo").value, body, wake: $("cWake").checked });
+  toast(r.wake ? r.wake.note : "Sent"); $("cBody").value = ""; await refresh(); render(true);
+}
+function composeTo(name) { setTab("overview"); setTimeout(() => { $("cTo").value = name; $("cBody").focus(); }, 0); }
+async function wakeAgent(name) {
+  openDialog(`Wake ${name}`, `<p class="muted" style="margin-top:0">${esc(name)} gets this as a message and, if it's on call, resumes right away.</p>
+    <textarea id="wReason" rows="3" style="width:100%">Please check your gang inbox.</textarea>`,
+    `<button class="primary" id="wGo">Wake</button>`);
+  $("wGo").onclick = async () => { const r = await api("/api/wake", { to: name, reason: $("wReason").value }); dlg.close(); toast(r.note); refresh(); };
+}
+async function removeAgent(name) { if (confirm(`Remove ${name} from the team? Its session keeps running; it just leaves the gang.`)) { await api("/api/agent/remove", { name }); refresh(); } }
+async function killJob(id) { if (confirm(`Stop job #${id}?`)) { await api("/api/job/kill", { id }); refresh(); } }
+
+function openDialog(title, body, actions = "", wide = false) {
+  $("dTitle").textContent = title; $("dBody").innerHTML = body; $("dActions").innerHTML = actions;
+  $("dlg").classList.toggle("wide", wide); if (!$("dlg").open) $("dlg").showModal();
+}
+
+async function showTimeline(name) {
+  const load = async () => {
+    const d = await (await fetch(`/api/agent?team=${encodeURIComponent(team)}&name=${encodeURIComponent(name)}&limit=300`)).json();
+    const ev = d.events ?? [];
+    let html = `<div class="row small muted" style="margin-bottom:10px">${esc(appLabel(d))}${d.session_title ? ` · “${esc(d.session_title)}”` : ""}${d.model ? ` · ${esc(d.model)}` : ""}${d.branch ? ` · ⎇ ${esc(d.branch)}` : ""}</div><div class="tl">`;
+    let tools = [];
+    const flush = () => { if (tools.length) { html += `<div class="tools">${tools.map((t) => `<div title="${esc(t.text)}">▸ ${esc(t.tool ?? "tool")} ${esc(t.text)}</div>`).join("")}</div>`; tools = []; } };
+    for (const e of ev) {
+      if (e.kind === "tool_call") { tools.push(e); continue; }
+      if (e.kind === "tool_result") continue;
+      flush();
+      const label = e.kind === "user" ? "You (or a hook)" : e.kind === "wake" ? "⏰ woken by gang" : name;
+      html += `<div class="turn ${e.kind}"><div class="ts">${label}${e.ts ? ` · ${new Date(e.ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}</div><div class="bubble">${md(e.text)}</div></div>`;
+    }
+    flush();
+    html += ev.length ? "</div>" : `</div><div class="empty">No transcript linked yet. It links after the agent's next action.</div>`;
+    openDialog(`${name} · ${d.role}`, html, `<button class="small" id="tlRefresh">Refresh</button>`, true);
+    $("tlRefresh").onclick = load;
+    $("dBody").scrollTop = $("dBody").scrollHeight;
+  };
+  await load();
+}
+async function showLog(id) {
+  const load = async () => {
+    const d = await (await fetch(`/api/job/log?id=${id}&lines=500`)).json();
+    const j = S.jobs.find((x) => x.id === id);
+    openDialog(`Job #${id} · ${j?.name ?? ""} · ${j?.status ?? ""}`, `<pre>${esc(d.log || "(no output yet)")}</pre>`, `<button class="small" id="lgRefresh">Refresh</button>`, true);
+    $("lgRefresh").onclick = load; $("dBody").scrollTop = $("dBody").scrollHeight;
+  };
+  await load();
+}
+
+// ---------- inbox ----------
+const openReplies = new Map(); // message id -> draft text
+function toggleInbox(open) { $("inbox").classList.toggle("open", open); if (open) renderInbox(); }
+$("inboxBtn").onclick = () => toggleInbox(!$("inbox").classList.contains("open"));
+$("needsBtn").onclick = () => toggleInbox(true);
+$("pauseBtn").onclick = () => setPaused(!S.settings?.paused);
+async function setPaused(p) { await api("/api/teams/pause", { paused: p }); toast(p ? "Team paused" : "Team resumed"); await refresh(); render(true); }
+function waitingHtml() {
+  const w = S.agents.filter((a) => a.approval);
+  if (!w.length) return "";
+  return `<div style="padding:10px 0;border-bottom:1px solid var(--line)"><div class="small" style="font-weight:700;color:var(--perm);margin-bottom:6px">WAITING ON YOU</div>${w.map((a) =>
+    `<div class="approval">${avatar(a.name, true)} <b style="color:inherit">${esc(a.name)}</b> · ${ago(a.approval.at)}<br>${esc(a.approval.detail)}<div class="faint">Open ${esc(appLabel(a))}${a.title ? ` → “${esc(a.title)}”` : ""} to approve or deny.</div></div>`).join("")}</div>`;
+}
+function renderInbox() {
+  document.querySelectorAll(".msg .reply textarea").forEach((ta) => { if (openReplies.has(Number(ta.dataset.id))) openReplies.set(Number(ta.dataset.id), ta.value); });
+  const msgs = S.human.messages;
+  $("inboxBody").innerHTML = waitingHtml() + (msgs.length ? msgs.map((m) => `<div class="msg ${m.read_at ? "" : "unread"}">
+      <div class="row" style="flex-wrap:nowrap">${avatar(m.from_agent, true)}<b>${esc(who(m.from_agent))}</b>
+        ${m.kind === "finding" ? `<span class="pill find">finding</span>` : m.kind === "decision" ? `<span class="pill">decision</span>` : m.kind === "question" ? `<span class="pill q">question</span>` : m.kind === "approval" ? `<span class="pill q">approval</span>` : m.kind === "guardrail" ? `<span class="pill q">guardrail</span>` : ""}
+        <span class="grow"></span><span class="when small faint" title="${clock(m.created)}">${ago(m.created)}</span></div>
+      <div style="margin:6px 0 0 32px">${md(m.body)}</div>
+      ${m.from_agent !== "gang" && m.from_agent !== "human" && m.kind !== "approval" ? `<div style="margin-left:32px"><button class="small ghost" onclick="toggleReply(${m.id})">Reply</button></div>
+      <div class="reply ${openReplies.has(m.id) ? "open" : ""}" style="margin-left:32px"><textarea data-id="${m.id}" placeholder="Reply to ${esc(m.from_agent)}…">${esc(openReplies.get(m.id) ?? "")}</textarea><button class="small primary" onclick="replyTo('${esc(m.from_agent)}', ${m.id}, this)">Send</button></div>` : ""}
+    </div>`).join("") : `<div class="empty">Nothing yet. Messages agents send to “human”, plus team findings and decisions, show up here.</div>`);
+  $("notifBtn").textContent = notifyOn ? "🔔 Notifications on" : "🔕 Notify me";
+}
+function toggleReply(id) { openReplies.has(id) ? openReplies.delete(id) : openReplies.set(id, ""); renderInbox(); document.querySelector(`.reply textarea[data-id="${id}"]`)?.focus(); }
+async function replyTo(to, id, btn) {
+  const ta = btn.previousElementSibling; const body = ta.value.trim(); if (!body) return;
+  openReplies.delete(id);
+  await api("/api/send", { to, body, kind: "answer", reply_to: id }); await api("/api/read", { ids: [id] });
+  toast(`Replied to ${to}`); await refresh(); renderInbox();
+}
+$("readAllBtn").onclick = async () => { await api("/api/read", {}); await refresh(); renderInbox(); };
+$("notifBtn").onclick = async () => {
+  if (!notifyOn && "Notification" in window && Notification.permission !== "granted") await Notification.requestPermission();
+  notifyOn = !notifyOn && (!("Notification" in window) || Notification.permission === "granted");
+  localStorage.gangNotify = notifyOn ? "1" : "0";
+  toast(notifyOn ? "You'll get a desktop notification for new messages to you" : "Notifications off"); renderInbox();
+};
+
+// ---------- teams ----------
+$("teamSel").onchange = (e) => { if (e.target.value === "__new") { e.target.value = team; return openNewTeam(); } team = e.target.value; syncUrl(); refresh().then(() => render(true)); };
+$("newTeamBtn").onclick = () => openNewTeam();
+$("teamSettingsBtn").onclick = () => openTeamSettings();
+let draftFolders = [];
+function folderListHtml() {
+  return draftFolders.length ? draftFolders.map((f, i) => `<div class="f"><span title="${esc(f)}">${esc(home(f))}</span><button class="small ghost" onclick="draftFolders.splice(${i},1);$('flist').innerHTML=folderListHtml()">✕</button></div>`).join("")
+    : `<div class="small faint" style="margin-bottom:6px">No folders yet.</div>`;
+}
+async function pickFolder() { const r = await api("/api/pick-folder", {}); if (r.path && !draftFolders.includes(r.path)) { draftFolders.push(r.path); $("flist").innerHTML = folderListHtml(); } }
+function addTypedFolder() { const v = $("fType").value.trim(); if (v && !draftFolders.includes(v)) { draftFolders.push(v.replace(/\/$/, "")); $("flist").innerHTML = folderListHtml(); $("fType").value = ""; } }
+async function openNewTeam() {
+  draftFolders = [];
+  const cp = (await (await fetch("/api/codex-projects")).json()).projects;
+  openDialog("New team", `<div class="stack">
+    <p class="muted" style="margin:0">A team is one project's worth of agents. Give it the folders the work lives in (a repo, data dirs, a second checkout…). Agents from Claude and Codex join it by name.</p>
+    ${cp.length ? `<div><label class="field">Start from a Codex project</label><select id="cpSel" style="width:100%"><option value="">—</option>${cp.map((p, i) => `<option value="${i}">${esc(p.name)} — ${esc(p.roots.map(home).join(", "))}</option>`).join("")}</select></div>` : ""}
+    <div><label class="field">Team name</label><input id="ntName" style="width:100%" placeholder="e.g. long-context-bench"></div>
+    <div><label class="field">Folders</label><div class="folderlist" id="flist">${folderListHtml()}</div>
+      <div class="row"><button onclick="pickFolder()">Choose folder…</button><input id="fType" class="grow" placeholder="or paste a path, e.g. ~/Projects/bench"><button class="small" onclick="addTypedFolder()">Add</button></div></div>
+  </div>`, `<button class="primary" id="ntGo">Create team</button>`);
+  if ($("cpSel")) $("cpSel").onchange = (e) => { const p = cp[Number(e.target.value)]; if (!p) return; draftFolders = [...p.roots]; $("flist").innerHTML = folderListHtml(); if (!$("ntName").value) $("ntName").value = p.name; };
+  $("fType").addEventListener("keydown", (e) => { if (e.key === "Enter") addTypedFolder(); });
+  $("ntGo").onclick = async () => {
+    if ($("fType").value.trim()) addTypedFolder();
+    const name = $("ntName").value.trim(); if (!name) return toast("Give the team a name");
+    if (!draftFolders.length) return toast("Add at least one folder");
+    const t = await api("/api/teams/create", { name, folders: draftFolders });
+    team = t.id; syncUrl(); dlg.close(); await refresh(); render(true); toast(`GANG GANG! “${t.name}” is live — now add some agents`); openAddAgent();
+  };
+}
+function openTeamSettings() {
+  const t = S.teams.find((x) => x.id === S.team); if (!t) return;
+  draftFolders = [...t.folderList];
+  openDialog(`Team settings · ${t.name}`, `<div class="stack">
+    <div><label class="field">Name</label><input id="tsName" style="width:100%" value="${esc(t.name)}"></div>
+    <div><label class="field">Folders</label><div class="folderlist" id="flist">${folderListHtml()}</div>
+      <div class="row"><button onclick="pickFolder()">Choose folder…</button><input id="fType" class="grow" placeholder="or paste a path"><button class="small" onclick="addTypedFolder()">Add</button></div></div>
+    <div class="small muted">Agents that register without naming a team join the team covering their folder.</div>
+    <div><label class="field">Guardrails</label>${guardrailsHtml(S.settings)}</div></div>`,
+    `<button class="ghost danger" id="tsDel">Delete team</button><button class="primary" id="tsSave">Save</button>`);
+  $("tsSave").onclick = async () => {
+    await api("/api/teams/update", { name: $("tsName").value, folders: draftFolders });
+    await api("/api/teams/settings", { settings: readGuardrails() });
+    dlg.close(); refresh(); toast("Saved");
+  };
+  $("tsDel").onclick = async () => { if (!confirm(`Delete team “${t.name}” and its messages, tasks and decisions? Agent sessions keep running.`)) return; await api("/api/teams/delete", {}); team = ""; dlg.close(); await refresh(); render(true); };
+}
+
+const GR = [
+  ["autonomy_budget", "Autonomous turns per agent", "How many times an agent can be woken by teammates or jobs before it needs you. Talking to it resets the count."],
+  ["wake_limit_per_agent", "Wakes an agent can receive per hour", ""],
+  ["wake_limit_per_sender", "Wakes an agent can send per hour", ""],
+  ["ping_pong_limit", "Back-and-forth wakes before a pair is held", "If two agents wake each other this many times each within 30 min, you're alerted and wakes between them stop."],
+  ["message_limit", "Messages an agent can send per 10 min", ""],
+  ["max_running_jobs", "Running jobs per team", ""],
+  ["max_job_hours", "Stop jobs after this many hours (0 = never)", ""],
+  ["approval_nudge_s", "Notify me when an approval waits (seconds, 0 = off)", ""],
+];
+function guardrailsHtml(st) {
+  const q = st.quiet_hours;
+  return `<div class="gr">${GR.map(([k, l, h]) => `<span>${l}</span><input type="number" min="0" id="gr_${k}" value="${st[k]}">${h ? `<span class="h">${h}</span>` : ""}`).join("")}
+    <span>Quiet hours (no agent wakes; empty = off)</span><span class="row" style="flex-wrap:nowrap;gap:4px"><input id="gr_qs" placeholder="23:00" value="${esc(q?.start ?? "")}" style="width:52px"><input id="gr_qe" placeholder="08:00" value="${esc(q?.end ?? "")}" style="width:52px"></span>
+  </div>`;
+}
+function readGuardrails() {
+  const out = {};
+  for (const [k] of GR) out[k] = Number($(`gr_${k}`).value);
+  const qs = $("gr_qs").value.trim(), qe = $("gr_qe").value.trim();
+  out.quiet_hours = qs && qe ? { start: qs, end: qe } : null;
+  return out;
+}
+
+// ---------- add agent ----------
+let roles = null;
+async function openAddAgent() {
+  const t = S.teams.find((x) => x.id === S.team); if (!t) return openNewTeam();
+  roles = roles ?? await (await fetch("/api/roles")).json();
+  const BLURB = { planner: "Splits the work into tasks, assigns them, records decisions.", implementer: "Takes tasks, claims files, writes the code, reports back.",
+    reviewer: "Checks finished work; signs off or sends it back with notes.", researcher: "Runs experiments as jobs and shares findings.", custom: "Any other role — type its name." };
+  const roleList = [...Object.keys(roles), "custom"];
+  const suggest = (r) => { const pre = r === "implementer" ? "impl" : r === "custom" ? "agent" : r; let i = 1; while (S.agents.some((a) => a.name === `${pre}-${i}`)) i++; return `${pre}-${i}`; };
+  let role = "implementer", existing = false;
+  openDialog(`Add an agent to ${t.name}`, `<div class="stack">
+    <div><label class="field">1 · Role</label><div class="roles">${roleList.map((r) => `<div class="role ${r === role ? "on" : ""}" data-r="${r}"><b>${r}</b><span class="muted">${esc(BLURB[r] ?? "")}</span></div>`).join("")}</div>
+      <input id="aRoleCustom" placeholder="custom role" style="margin-top:6px;display:none"></div>
+    <div class="row"><div class="grow"><label class="field">2 · Name</label><input id="aName" style="width:100%" value="${suggest(role)}"></div>
+      <div><label class="field">3 · Session</label><div class="seg"><button class="on" data-x="0">New session</button><button data-x="1">Already working</button></div></div></div>
+    <div><label class="field">4 · Paste this into the session <span class="faint">(new or existing; it keeps its history)</span></label><div class="prompt" id="aPrompt"></div>
+      <div class="row" style="margin-top:8px"><button class="primary" id="aCopy">Copy prompt</button><span class="small muted" id="aCopied"></span></div></div>
+    <div><label class="field">Where to open it</label><ol class="steps small">
+      <li><b>Codex desktop:</b> <button class="small" id="aCodex">Open ${esc(base(t.folderList[0]))} in Codex</button> → start a <i>local</i> thread → paste.</li>
+      <li><b>Claude desktop:</b> Code tab → new session → choose <code>${esc(home(t.folderList[0]))}</code> → paste.</li>
+      <li class="muted">Sessions opened before gang was installed need reopening to get the gang tools. Codex asks you to trust gang's hooks once (Settings → Hooks).</li></ol></div>
+  </div>`, "", true);
+  const update = async () => {
+    const r = role === "custom" ? ($("aRoleCustom").value.trim() || "agent") : role;
+    const d = await (await fetch(`/api/join-prompt?team=${encodeURIComponent(t.name)}&name=${encodeURIComponent($("aName").value.trim() || "agent-1")}&role=${encodeURIComponent(r)}${existing ? "&existing=1" : ""}`)).json();
+    $("aPrompt").textContent = d.prompt; $("aCopied").textContent = "";
+  };
+  document.querySelectorAll(".role").forEach((el) => el.onclick = () => {
+    document.querySelectorAll(".role").forEach((x) => x.classList.toggle("on", x === el));
+    const prev = suggest(role); role = el.dataset.r;
+    $("aRoleCustom").style.display = role === "custom" ? "" : "none";
+    if (role !== "custom" && ($("aName").value === prev || !$("aName").value)) $("aName").value = suggest(role);
+    update();
+  });
+  document.querySelectorAll(".seg button").forEach((b) => b.onclick = () => { existing = b.dataset.x === "1"; document.querySelectorAll(".seg button").forEach((x) => x.classList.toggle("on", x === b)); update(); });
+  $("aName").oninput = update; $("aRoleCustom").oninput = update;
+  $("aCopy").onclick = async () => { const ok = await copy($("aPrompt").textContent); $("aCopied").textContent = ok ? "Copied ✓ — paste it into the session" : "Couldn't copy automatically; select the text above"; };
+  $("aCodex").onclick = async () => { await api("/api/open-codex", { folder: t.folderList[0] }); toast("Opening Codex…"); };
+  update();
+}
+$("addAgentBtn").onclick = () => openAddAgent();
+
+document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
+refresh().then(() => { render(true); if (params.get("add") === "1" && S.team) { params.delete("add"); syncUrl(); openAddAgent(); } });
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

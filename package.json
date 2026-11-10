@@ -1,0 +1,21 @@
+{
+  "name": "gang-gang",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lightweight cross-agent hub for Claude Code and Codex sessions",
+  "type": "module",
+  "bin": {
+    "gang": "bin/gang"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "hub": "node src/cli.ts daemon",
+    "test": "GANG_NO_NOTIFY=1 node --no-warnings --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  }
+}

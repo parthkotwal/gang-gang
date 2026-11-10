@@ -1,0 +1,4 @@
+#!/bin/sh
+# gang CLI wrapper (runs the TypeScript entry directly with Node >= 24); symlink-safe
+SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+exec node --no-warnings "$(dirname "$SELF")/../src/cli.ts" "$@"
